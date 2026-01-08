@@ -1,83 +1,56 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <title>Arduino Bridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: sans-serif; text-align: center; padding: 30px; background: #f0f2f5; }
-        .box { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }
-        button { padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; margin: 5px; }
-        #connect { background: #28a745; color: white; }
-        #stop { background: #dc3545; color: white; display: none; }
-        .display { font-size: 32px; color: #007bff; margin: 15px 0; font-weight: bold; }
-    </style>
-</head>
 <body>
-
-<div class="box">
-    <h2>Pro Micro Bridge</h2>
-    <p id="msg">Plug in and click connect</p>
-    <div class="display" id="val">--</div>
-    <button id="connect">Connect Arduino</button>
-    <button id="stop">Disconnect</button>
-</div>
+    <div style="text-align:center; padding:20px; font-family:sans-serif;">
+        <h2>Pro Micro Bridge</h2>
+        <button id="connect" style="padding:20px; background:green; color:white;">CONNECT DEVICE</button>
+        <div id="status">Disconnected</div>
+        <h1 id="display">--</h1>
+    </div>
 
 <script>
-    let port;
-    let reader;
-    let writer;
+let device;
+const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
-    document.getElementById('connect').addEventListener('click', async () => {
-        try {
-            // Request a port and open a connection.
-            port = await navigator.serial.requestPort();
-            await port.open({ baudRate: 9600 });
+document.getElementById('connect').addEventListener('click', async () => {
+    try {
+        // Look for ANY device to see if the Pro Micro shows up
+        device = await navigator.usb.requestDevice({ filters: [] });
+        
+        await device.open();
+        await device.selectConfiguration(1);
+        
+        // On Pro Micro, the Serial data is usually on Interface 2
+        await device.claimInterface(2);
+        
+        // This line tells the Pro Micro "The phone is ready!" (DTR signal)
+        await device.controlTransferOut({
+            requestType: 'class',
+            recipient: 'interface',
+            request: 0x22, value: 0x01, index: 2
+        });
 
-            document.getElementById('msg').innerText = "Status: Connected";
-            document.getElementById('connect').style.display = "none";
-            document.getElementById('stop').style.display = "inline-block";
-
-            // Set up Streams
-            const encoder = new TextEncoderStream();
-            const writableStreamClosed = encoder.readable.pipeTo(port.writable);
-            writer = encoder.writable.getWriter();
-
-            startReading();
-
-        } catch (e) {
-            document.getElementById('msg').innerText = "Error: " + e.message;
-        }
-    });
-
-    async function startReading() {
-        const decoder = new TextDecoderStream();
-        const readableStreamClosed = port.readable.pipeTo(decoder.writable);
-        reader = decoder.readable.getReader();
-
-        try {
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                if (value) {
-                    const cleanData = value.trim();
-                    if (cleanData) {
-                        // Update Phone UI
-                        document.getElementById('val').innerText = cleanData;
-                        // ECHO back to Arduino
-                        await writer.write(cleanData + "\n");
-                    }
-                }
-            }
-        } catch (error) {
-            console.error(error);
-        } finally {
-            reader.releaseLock();
-        }
+        document.getElementById('status').innerText = "Connected!";
+        readLoop();
+    } catch (e) {
+        document.getElementById('status').innerText = e.message;
     }
+});
 
-    document.getElementById('stop').addEventListener('click', () => {
-        location.reload(); 
-    });
+async function readLoop() {
+    while (device && device.opened) {
+        try {
+            const result = await device.transferIn(2, 64); // Endpoint 2 is standard for CDC
+            const text = decoder.decode(result.data).trim();
+            if (text) {
+                document.getElementById('display').innerText = text;
+                // ECHO BACK
+                await device.transferOut(2, encoder.encode(text + "\n"));
+            }
+        } catch (e) { console.error(e); break; }
+    }
+}
 </script>
 </body>
 </html>
