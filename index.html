@@ -1,56 +1,109 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arduino Pro Micro Bridge</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
+        .container { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; min-width: 300px; }
+        button { padding: 15px 30px; font-size: 18px; border: none; border-radius: 10px; cursor: pointer; transition: 0.2s; }
+        #connect { background: #28a745; color: white; }
+        #connect:hover { background: #218838; }
+        #status { margin-top: 15px; color: #666; font-style: italic; }
+        .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 20px 0; }
+    </style>
+</head>
 <body>
-    <div style="text-align:center; padding:20px; font-family:sans-serif;">
-        <h2>Pro Micro Bridge</h2>
-        <button id="connect" style="padding:20px; background:green; color:white;">CONNECT DEVICE</button>
-        <div id="status">Disconnected</div>
-        <h1 id="display">--</h1>
-    </div>
+
+<div class="container">
+    <h2>USB Bridge</h2>
+    <div id="status">Status: Waiting for Connect</div>
+    <div class="value-box" id="display">0</div>
+    <button id="connect">CONNECT ARDUINO</button>
+</div>
 
 <script>
-let device;
-const decoder = new TextDecoder();
-const encoder = new TextEncoder();
+    let device;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let activeItf = null;
 
-document.getElementById('connect').addEventListener('click', async () => {
-    try {
-        // Look for ANY device to see if the Pro Micro shows up
-        device = await navigator.usb.requestDevice({ filters: [] });
-        
-        await device.open();
-        await device.selectConfiguration(1);
-        
-        // On Pro Micro, the Serial data is usually on Interface 2
-        await device.claimInterface(2);
-        
-        // This line tells the Pro Micro "The phone is ready!" (DTR signal)
-        await device.controlTransferOut({
-            requestType: 'class',
-            recipient: 'interface',
-            request: 0x22, value: 0x01, index: 2
-        });
-
-        document.getElementById('status').innerText = "Connected!";
-        readLoop();
-    } catch (e) {
-        document.getElementById('status').innerText = e.message;
-    }
-});
-
-async function readLoop() {
-    while (device && device.opened) {
+    document.getElementById('connect').addEventListener('click', async () => {
+        const statusEl = document.getElementById('status');
         try {
-            const result = await device.transferIn(2, 64); // Endpoint 2 is standard for CDC
-            const text = decoder.decode(result.data).trim();
-            if (text) {
-                document.getElementById('display').innerText = text;
-                // ECHO BACK
-                await device.transferOut(2, encoder.encode(text + "\n"));
+            // 1. Request the device
+            device = await navigator.usb.requestDevice({ filters: [] });
+            await device.open();
+            
+            // 2. Select configuration
+            if (device.configuration === null) await device.selectConfiguration(1);
+
+            // 3. Smart Interface Finder (Tests 2, then 0, then 1)
+            const itfToTry = [2, 0, 1];
+            let success = false;
+
+            for (let itf of itfToTry) {
+                try {
+                    await device.claimInterface(itf);
+                    activeItf = itf;
+                    
+                    // 4. Send DTR Signal (Crucial for Pro Micro/Leonardo)
+                    await device.controlTransferOut({
+                        requestType: 'class',
+                        recipient: 'interface',
+                        request: 0x22,
+                        value: 0x01,
+                        index: itf
+                    });
+                    
+                    success = true;
+                    break;
+                } catch (e) {
+                    console.warn(`Interface ${itf} unavailable, trying next...`);
+                }
             }
-        } catch (e) { console.error(e); break; }
+
+            if (success) {
+                statusEl.innerText = "Connected on Interface " + activeItf;
+                statusEl.style.color = "green";
+                readLoop();
+            } else {
+                statusEl.innerText = "Error: Could not claim a valid interface.";
+            }
+
+        } catch (err) {
+            statusEl.innerText = "Connection Failed: " + err.message;
+            console.error(err);
+        }
+    });
+
+    async function readLoop() {
+        const displayEl = document.getElementById('display');
+        while (device && device.opened) {
+            try {
+                // Read from the active interface. 
+                // Note: Endpoint is usually same as Interface number on Pro Micro CDC
+                const result = await device.transferIn(activeItf, 64);
+                
+                if (result.data && result.data.byteLength > 0) {
+                    const receivedText = decoder.decode(result.data).trim();
+                    
+                    if (receivedText) {
+                        // Display on phone
+                        displayEl.innerText = receivedText;
+                        
+                        // ECHO: Send it back to Arduino
+                        await device.transferOut(activeItf, encoder.encode(receivedText + "\n"));
+                    }
+                }
+            } catch (e) {
+                console.error("Read Loop Error:", e);
+                document.getElementById('status').innerText = "Disconnected";
+                break;
+            }
+        }
     }
-}
 </script>
 </body>
 </html>
