@@ -2,10 +2,87 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>My GitHub Page</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arduino Web Serial</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #f0f2f5; margin: 0; }
+        .card { background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+        button { padding: 12px 24px; font-size: 1rem; cursor: pointer; border: none; border-radius: 8px; transition: 0.3s; margin: 10px; }
+        #connectBtn { background-color: #28a745; color: white; }
+        #disconnectBtn { background-color: #dc3545; color: white; display: none; }
+        .status { margin-top: 15px; font-weight: bold; color: #555; }
+    </style>
 </head>
 <body>
-    <h1>Hello World!</h1>
-    <p>This is my first website hosted on GitHub.</p>
+
+<div class="card">
+    <h2>Arduino Connector</h2>
+    <p>Connect your Arduino via USB-OTG</p>
+    
+    <button id="connectBtn">Connect Arduino</button>
+    <button id="disconnectBtn">Disconnect</button>
+    
+    <div id="status" class="status">Status: Disconnected</div>
+</div>
+
+<script>
+    let port;
+
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const statusDiv = document.getElementById('status');
+
+    connectBtn.addEventListener('click', async () => {
+        if ("serial" in navigator) {
+            try {
+                // Request a port and open a connection.
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 9600 }); // Common Arduino baud rate
+
+                statusDiv.innerText = "Status: Connected!";
+                statusDiv.style.color = "green";
+                connectBtn.style.display = "none";
+                disconnectBtn.style.display = "inline-block";
+
+                // Setup a reader to listen for data (optional for now)
+                readData();
+
+            } catch (error) {
+                console.error(error);
+                statusDiv.innerText = "Status: Connection Failed";
+            }
+        } else {
+            alert("Web Serial API not supported in this browser. Try Chrome on Android.");
+        }
+    });
+
+    disconnectBtn.addEventListener('click', async () => {
+        if (port) {
+            await port.close();
+            port = null;
+            statusDiv.innerText = "Status: Disconnected";
+            statusDiv.style.color = "#555";
+            connectBtn.style.display = "inline-block";
+            disconnectBtn.style.display = "none";
+        }
+    });
+
+    async function readData() {
+        const reader = port.readable.getReader();
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                // 'value' is a Uint8Array. 
+                console.log(new TextDecoder().decode(value));
+            }
+        } catch (error) {
+            console.error(error);
+        } finally {
+            reader.releaseLock();
+        }
+    }
+</script>
+
 </body>
 </html>
