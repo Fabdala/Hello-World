@@ -3,143 +3,137 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stable Arduino Video Link</title>
+    <title>Hardware Sync Debug</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; margin: 0; }
-        .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
-        #videoWrapper { width: 100%; background: #000; border-radius: 10px; overflow: hidden; margin-top: 15px; cursor: pointer; min-height: 200px; display: flex; align-items: center; justify-content: center;}
+        body { font-family: sans-serif; text-align: center; padding: 15px; background: #f0f4f8; margin: 0; }
+        .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 100%; max-width: 450px; box-sizing: border-box; }
+        #videoWrapper { width: 100%; background: #000; border-radius: 10px; overflow: hidden; margin-top: 15px; min-height: 180px; }
         video { width: 100%; display: block; }
-        .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
-        button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
+        .controls { margin: 15px 0; display: flex; flex-direction: column; gap: 8px; }
+        button { padding: 12px; font-size: 15px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
         .btn-fullscreen { background: #6f42c1; color: white; }
-        .btn-reset { background: #6c757d; color: white; font-size: 12px; }
-        .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
-        #status { color: #666; font-size: 14px; margin-top: 10px; }
-        .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; }
-        .heartbeat { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #ccc; margin-right: 5px; }
-        .active-hb { background: #28a745; box-shadow: 0 0 5px #28a745; }
-        
-        #videoWrapper:fullscreen { border-radius: 0; width: 100vw; height: 100vh; }
-        #videoWrapper:fullscreen video { height: 100%; width: auto; margin: auto; }
+        .value-box { font-size: 42px; font-weight: bold; color: #007bff; margin: 5px 0; }
+        #debug { background: #222; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; text-align: left; border-radius: 8px; margin-top: 10px; height: 80px; overflow-y: auto; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Pro Speed Bridge</h2>
-    <div id="videoWrapper"><video id="myVideo" loop muted playsinline preload="auto"></video></div>
+    <div id="videoWrapper"><video id="myVideo" loop muted playsinline></video></div>
 
     <div class="controls">
         <input type="file" id="filePicker" accept="video/*">
-        <button id="mainBtn" class="btn-connect">1. CONNECT ARDUINO</button>
-        <button id="fullScreenBtn" class="btn-fullscreen">2. START & FULL SCREEN</button>
-        <button onclick="location.reload()" class="btn-reset">RESET SYSTEM</button>
+        <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
+        <button id="fullScreenBtn" class="btn-fullscreen">START & FULL SCREEN</button>
     </div>
 
-    <div class="math-info" id="mathDisplay">Load video to begin</div>
-    <div class="value-box"><span id="display">0.00</span><small style="font-size: 20px">x</small></div>
-    <div id="status"><span class="heartbeat" id="hb"></span>Ready</div>
+    <div id="mathDisplay" style="font-size: 14px; color: #555;">Select Video First</div>
+    <div class="value-box" id="display">0.00x</div>
+    
+    <div id="debug">System Logs:<br>> Waiting for user...</div>
 </div>
 
 <script>
     let device, isConnected = false, avgSpeed = 1.0, wakeLock = null;
-    let lastArduinoVal = 0;
     const encoder = new TextEncoder();
     const videoEl = document.getElementById('myVideo');
     const displayEl = document.getElementById('display');
-    const hb = document.getElementById('hb');
+    const debugEl = document.getElementById('debug');
 
-    // 1. Better File Loading
+    function log(msg) {
+        debugEl.innerHTML += `<br>> ${msg}`;
+        debugEl.scrollTop = debugEl.scrollHeight;
+    }
+
+    // 1. File Picker
     document.getElementById('filePicker').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) {
             const val = window.prompt("Average Speed (Baseline):", "30.0");
             avgSpeed = parseFloat(val) || 1.0;
             videoEl.src = URL.createObjectURL(file);
-            videoEl.load(); // Force browser to start buffering
-            document.getElementById('mathDisplay').innerText = `Video Prepared (Baseline: ${avgSpeed})`;
+            log(`Video loaded. Baseline: ${avgSpeed}`);
         }
     });
 
-    // 2. Stronger Playback Trigger
+    // 2. Full Screen & Wake Lock
     document.getElementById('fullScreenBtn').addEventListener('click', async () => {
-        if (!videoEl.src) return alert("Select a video first!");
-        
+        if (!videoEl.src) return alert("Select video!");
         try {
-            // Request Wake Lock
             if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
-            
-            // Go Full Screen
             const wrapper = document.getElementById('videoWrapper');
             if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
-            else if (wrapper.webkitRequestFullscreen) await wrapper.webkitRequestFullscreen();
-
-            // Start Video
             await videoEl.play();
-            document.getElementById('status').innerText = "Streaming Active";
-        } catch (err) {
-            console.error(err);
-            // Fallback for some mobile browsers
-            videoEl.play();
-        }
+            log("Playback & Fullscreen active");
+        } catch (e) { log("FS Error: " + e.message); }
     });
 
-    // 3. Robust USB Logic
+    // 3. Robust USB Connection
     document.getElementById('mainBtn').addEventListener('click', async () => {
         try {
+            log("Requesting USB Device...");
             device = await navigator.usb.requestDevice({ filters: [] });
             await device.open();
+            
             if (device.configuration === null) await device.selectConfiguration(1);
             
-            // Auto-find endpoints
-            let itfNum = 0, epIn, epOut;
-            const conf = device.configuration;
-            for (const itf of conf.interfaces) {
+            // Comprehensive Interface Search
+            let itfNum = -1, epIn = -1, epOut = -1;
+            for (const itf of device.configuration.interfaces) {
                 const alt = itf.alternates[0];
-                if (alt.interfaceClass === 0xFF || alt.interfaceClass === 10) { // Custom or Data class
+                // Look for CDC Data or Vendor Specific
+                if (alt.interfaceClass === 0xff || alt.interfaceClass === 10 || alt.interfaceClass === 2) {
                     itfNum = itf.interfaceNumber;
                     for (const ep of alt.endpoints) {
                         if (ep.direction === 'in') epIn = ep.endpointNumber;
                         if (ep.direction === 'out') epOut = ep.endpointNumber;
                     }
+                    if (epIn !== -1 && epOut !== -1) break;
                 }
             }
 
+            if (itfNum === -1) throw new Error("No compatible Interface found");
+
             await device.claimInterface(itfNum);
+            // Set DTR to wake up Arduino Serial
             await device.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 0x01, index: itfNum });
 
+            log(`Connected! Interface: ${itfNum}, In: ${epIn}, Out: ${epOut}`);
             isConnected = true;
             document.getElementById('mainBtn').innerText = "DISCONNECT";
             readLoop(epIn, epOut);
-        } catch (err) { document.getElementById('status').innerText = "Error: " + err.message; }
+        } catch (err) { log("USB Error: " + err.message); }
     });
 
     async function readLoop(epIn, epOut) {
-        while (isConnected) {
+        log("Read loop started...");
+        while (isConnected && device && device.opened) {
             try {
                 const result = await device.transferIn(epIn, 4);
+                
                 if (result.status === 'ok' && result.data.byteLength === 4) {
-                    const arduinoVel = new DataView(result.data.buffer).getFloat32(0, true);
+                    const view = new DataView(result.data.buffer);
+                    const vel = view.getFloat32(0, true);
                     
-                    if (!isNaN(arduinoVel)) {
-                        const ratio = arduinoVel / avgSpeed;
+                    if (!isNaN(vel)) {
+                        const ratio = vel / avgSpeed;
+                        displayEl.innerText = ratio.toFixed(2) + "x";
                         
-                        // Apply Speed safely
                         if (videoEl.readyState >= 2) {
                             videoEl.playbackRate = Math.max(0.06, Math.min(16, ratio));
                         }
-
-                        // UI Updates
-                        displayEl.innerText = ratio.toFixed(2);
-                        hb.classList.toggle('active-hb'); // Heartbeat flicker
                         
-                        // Echo back to Arduino
-                        const echo = ratio.toFixed(2) + "\n";
-                        await device.transferOut(epOut, encoder.encode(echo));
+                        // Echo to Arduino
+                        const msg = ratio.toFixed(2) + "\n";
+                        await device.transferOut(epOut, encoder.encode(msg));
                     }
+                } else if (result.status === 'stall') {
+                    log("USB Stall - clearing...");
+                    await device.clearHalt('in', epIn);
                 }
             } catch (e) {
+                log("Loop Error: " + e.message);
                 isConnected = false;
                 break;
             }
