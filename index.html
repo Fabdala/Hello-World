@@ -1,18 +1,112 @@
-async function readLoop() {
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arduino Pro Micro Bridge</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
+        .container { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; min-width: 300px; }
+        button { padding: 15px 30px; font-size: 18px; border: none; border-radius: 10px; cursor: pointer; transition: 0.3s; width: 100%; }
+        .btn-connect { background: #28a745; color: white; }
+        .btn-disconnect { background: #dc3545; color: white; }
+        #status { margin-top: 15px; color: #666; font-style: italic; min-height: 1.2em; }
+        .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 20px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>USB Bridge</h2>
+    <div id="status">Ready to connect</div>
+    <div class="value-box" id="display">0.0</div>
+    <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
+</div>
+
+<script>
+    let device;
+    let isConnected = false;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let activeItf = null;
+    let epIn = null;
+    let epOut = null;
+
+    const mainBtn = document.getElementById('mainBtn');
+    const statusEl = document.getElementById('status');
+    const displayEl = document.getElementById('display');
+
+    mainBtn.addEventListener('click', async () => {
+        if (!isConnected) {
+            await connect();
+        } else {
+            await disconnect();
+        }
+    });
+
+    async function connect() {
+        try {
+            device = await navigator.usb.requestDevice({ filters: [] });
+            await device.open();
+            if (device.configuration === null) await device.selectConfiguration(1);
+
+            let success = false;
+            for (let itf of [2, 0, 1]) {
+                try {
+                    await device.claimInterface(itf);
+                    activeItf = itf;
+                    await device.controlTransferOut({
+                        requestType: 'class', recipient: 'interface',
+                        request: 0x22, value: 0x01, index: itf
+                    });
+                    const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
+                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+                    if (epIn && epOut) { success = true; break; }
+                } catch (e) { console.log(`Itf ${itf} failed.`); }
+            }
+
+            if (success) {
+                isConnected = true;
+                mainBtn.innerText = "DISCONNECT";
+                mainBtn.className = "btn-disconnect";
+                statusEl.innerText = "Connected!";
+                statusEl.style.color = "green";
+                readLoop();
+            }
+        } catch (err) {
+            statusEl.innerText = "Error: " + err.message;
+        }
+    }
+
+    async function disconnect() {
+        isConnected = false;
+        try {
+            if (device) {
+                await device.releaseInterface(activeItf);
+                await device.close();
+            }
+        } catch (e) { console.error("Error during disconnect:", e); }
+        mainBtn.innerText = "CONNECT ARDUINO";
+        mainBtn.className = "btn-connect";
+        statusEl.innerText = "Disconnected.";
+        statusEl.style.color = "#666";
+        displayEl.innerText = "0.0";
+    }
+
+    async function readLoop() {
         while (isConnected && device && device.opened) {
             try {
                 const result = await device.transferIn(epIn, 64);
                 if (result.data && result.data.byteLength > 0) {
                     const text = decoder.decode(result.data).trim();
-                    
                     if (text) {
-                        // CHANGE: Convert string to a float and format to 1 decimal place
+                        // Handle the Float logic here
                         const floatVal = parseFloat(text);
                         if (!isNaN(floatVal)) {
-                            displayEl.innerText = floatVal.toFixed(1); 
+                            displayEl.innerText = floatVal.toFixed(1);
                         }
-
-                        // Echo back the original text
+                        // Echo back
                         await device.transferOut(epOut, encoder.encode(text + "\n"));
                     }
                 }
@@ -25,3 +119,6 @@ async function readLoop() {
             }
         }
     }
+</script>
+</body>
+</html>
