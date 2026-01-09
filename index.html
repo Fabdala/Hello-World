@@ -3,168 +3,148 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Hardware Control</title>
+    <title>Stable Arduino Video Link</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; margin: 0; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
-        #videoWrapper { width: 100%; background: #000; border-radius: 10px; overflow: hidden; margin-top: 15px; cursor: pointer; }
+        #videoWrapper { width: 100%; background: #000; border-radius: 10px; overflow: hidden; margin-top: 15px; cursor: pointer; min-height: 200px; display: flex; align-items: center; justify-content: center;}
         video { width: 100%; display: block; }
         .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
         button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
         .btn-fullscreen { background: #6f42c1; color: white; }
-        .btn-reset { background: #dc3545; color: white; font-size: 14px; padding: 10px; margin-top: 5px; }
+        .btn-reset { background: #6c757d; color: white; font-size: 12px; }
         .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
-        #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
-        .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; min-height: 40px; }
-        #videoWrapper:fullscreen { border-radius: 0; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
-        #videoWrapper:fullscreen video { height: 100%; width: auto; }
+        #status { color: #666; font-size: 14px; margin-top: 10px; }
+        .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; }
+        .heartbeat { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #ccc; margin-right: 5px; }
+        .active-hb { background: #28a745; box-shadow: 0 0 5px #28a745; }
+        
+        #videoWrapper:fullscreen { border-radius: 0; width: 100vw; height: 100vh; }
+        #videoWrapper:fullscreen video { height: 100%; width: auto; margin: auto; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Hardware Control Center</h2>
-    <div id="videoWrapper"><video id="myVideo" loop muted playsinline></video></div>
+    <h2>Pro Speed Bridge</h2>
+    <div id="videoWrapper"><video id="myVideo" loop muted playsinline preload="auto"></video></div>
 
     <div class="controls">
         <input type="file" id="filePicker" accept="video/*">
         <button id="mainBtn" class="btn-connect">1. CONNECT ARDUINO</button>
-        <button id="fullScreenBtn" class="btn-fullscreen">2. GO FULL SCREEN</button>
-        <button id="resetBtn" class="btn-reset">RESET / NEW VIDEO</button>
+        <button id="fullScreenBtn" class="btn-fullscreen">2. START & FULL SCREEN</button>
+        <button onclick="location.reload()" class="btn-reset">RESET SYSTEM</button>
     </div>
 
-    <div class="math-info" id="mathDisplay">Select Video & Connect Arduino</div>
-    <div class="value-box" id="display">0.00x</div>
-    <div id="status">Waiting...</div>
+    <div class="math-info" id="mathDisplay">Load video to begin</div>
+    <div class="value-box"><span id="display">0.00</span><small style="font-size: 20px">x</small></div>
+    <div id="status"><span class="heartbeat" id="hb"></span>Ready</div>
 </div>
 
 <script>
-    let device, isConnected = false, hasStartedVideo = false, avgSpeed = 1.0, wakeLock = null; 
+    let device, isConnected = false, avgSpeed = 1.0, wakeLock = null;
+    let lastArduinoVal = 0;
     const encoder = new TextEncoder();
-    let activeItf, epIn, epOut;
+    const videoEl = document.getElementById('myVideo');
+    const displayEl = document.getElementById('display');
+    const hb = document.getElementById('hb');
 
-    const mainBtn = document.getElementById('mainBtn'), fullScreenBtn = document.getElementById('fullScreenBtn');
-    const resetBtn = document.getElementById('resetBtn'), statusEl = document.getElementById('status');
-    const displayEl = document.getElementById('display'), mathDisplay = document.getElementById('mathDisplay');
-    const videoEl = document.getElementById('myVideo'), videoWrapper = document.getElementById('videoWrapper');
-    const filePicker = document.getElementById('filePicker');
-
-    // Robust Wake Lock Function
-    async function requestWakeLock() {
-        if ('wakeLock' in navigator) {
-            try {
-                if (wakeLock !== null) return; // Already locked
-                wakeLock = await navigator.wakeLock.request('screen');
-                statusEl.innerText = "USB Link Active & Screen Locked ON";
-                
-                // Re-request if page is minimized/restored
-                wakeLock.addEventListener('release', () => { wakeLock = null; });
-            } catch (err) { console.error(`${err.name}, ${err.message}`); }
-        }
-    }
-
-    resetBtn.addEventListener('click', async () => {
-        videoEl.pause();
-        videoEl.src = "";
-        if (wakeLock) {
-            await wakeLock.release();
-            wakeLock = null;
-        }
-        hasStartedVideo = false;
-        displayEl.innerText = "0.00x";
-        mathDisplay.innerText = "System Reset. Ready for new video.";
-        statusEl.innerText = "Screen lock released.";
-        filePicker.value = "";
-    });
-
-    filePicker.addEventListener('change', (event) => {
-        const file = event.target.files[0];
+    // 1. Better File Loading
+    document.getElementById('filePicker').addEventListener('change', (e) => {
+        const file = e.target.files[0];
         if (file) {
-            const userInput = window.prompt("Enter Average Speed (Baseline):", "30.0");
-            avgSpeed = parseFloat(userInput) || 1.0;
+            const val = window.prompt("Average Speed (Baseline):", "30.0");
+            avgSpeed = parseFloat(val) || 1.0;
             videoEl.src = URL.createObjectURL(file);
-            mathDisplay.innerHTML = `Loaded: Avg Speed ${avgSpeed}`;
+            videoEl.load(); // Force browser to start buffering
+            document.getElementById('mathDisplay').innerText = `Video Prepared (Baseline: ${avgSpeed})`;
         }
     });
 
-    fullScreenBtn.addEventListener('click', async () => {
-        if (!videoEl.src) return alert("Select video first");
-        await requestWakeLock(); // Request again when going full screen
-        if (videoWrapper.requestFullscreen) videoWrapper.requestFullscreen();
-        else if (videoWrapper.webkitRequestFullscreen) videoWrapper.webkitRequestFullscreen();
-        videoEl.play();
-        hasStartedVideo = true;
-    });
+    // 2. Stronger Playback Trigger
+    document.getElementById('fullScreenBtn').addEventListener('click', async () => {
+        if (!videoEl.src) return alert("Select a video first!");
+        
+        try {
+            // Request Wake Lock
+            if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+            
+            // Go Full Screen
+            const wrapper = document.getElementById('videoWrapper');
+            if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
+            else if (wrapper.webkitRequestFullscreen) await wrapper.webkitRequestFullscreen();
 
-    mainBtn.addEventListener('click', async () => {
-        if (!isConnected) {
-            await connect();
-            await requestWakeLock();
-        } else {
-            isConnected = false;
-            if (device) await device.close();
-            if (wakeLock) await wakeLock.release();
-            mainBtn.innerText = "1. CONNECT ARDUINO";
-            statusEl.innerText = "Arduino Disconnected.";
+            // Start Video
+            await videoEl.play();
+            document.getElementById('status').innerText = "Streaming Active";
+        } catch (err) {
+            console.error(err);
+            // Fallback for some mobile browsers
+            videoEl.play();
         }
     });
 
-    async function connect() {
+    // 3. Robust USB Logic
+    document.getElementById('mainBtn').addEventListener('click', async () => {
         try {
             device = await navigator.usb.requestDevice({ filters: [] });
             await device.open();
             if (device.configuration === null) await device.selectConfiguration(1);
-            let success = false;
-            for (let itf of [2, 0, 1]) {
-                try {
-                    await device.claimInterface(itf);
-                    activeItf = itf;
-                    await device.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 0x01, index: itf });
-                    const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
-                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
-                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
-                    if (epIn && epOut) { success = true; break; }
-                } catch (e) { }
-            }
-            if (success) {
-                isConnected = true;
-                mainBtn.innerText = "DISCONNECT";
-                readLoop();
-            }
-        } catch (err) { statusEl.innerText = "Error: " + err.message; }
-    }
-
-    async function readLoop() {
-        while (isConnected && device && device.opened) {
-            try {
-                const result = await device.transferIn(epIn, 4);
-                if (result.data && result.data.byteLength === 4) {
-                    const view = new DataView(result.data.buffer);
-                    const arduinoVel = view.getFloat32(0, true); 
-                    if (!isNaN(arduinoVel)) {
-                        const calculatedRatio = arduinoVel / avgSpeed;
-                        displayEl.innerText = calculatedRatio.toFixed(2) + "x";
-                        mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${calculatedRatio.toFixed(2)}`;
-                        if (videoEl.readyState >= 2) {
-                            videoEl.playbackRate = Math.max(0.06, Math.min(16, calculatedRatio));
-                        }
-                        await device.transferOut(epOut, encoder.encode(calculatedRatio.toFixed(2) + "\n"));
+            
+            // Auto-find endpoints
+            let itfNum = 0, epIn, epOut;
+            const conf = device.configuration;
+            for (const itf of conf.interfaces) {
+                const alt = itf.alternates[0];
+                if (alt.interfaceClass === 0xFF || alt.interfaceClass === 10) { // Custom or Data class
+                    itfNum = itf.interfaceNumber;
+                    for (const ep of alt.endpoints) {
+                        if (ep.direction === 'in') epIn = ep.endpointNumber;
+                        if (ep.direction === 'out') epOut = ep.endpointNumber;
                     }
                 }
-            } catch (e) { 
+            }
+
+            await device.claimInterface(itfNum);
+            await device.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 0x01, index: itfNum });
+
+            isConnected = true;
+            document.getElementById('mainBtn').innerText = "DISCONNECT";
+            readLoop(epIn, epOut);
+        } catch (err) { document.getElementById('status').innerText = "Error: " + err.message; }
+    });
+
+    async function readLoop(epIn, epOut) {
+        while (isConnected) {
+            try {
+                const result = await device.transferIn(epIn, 4);
+                if (result.status === 'ok' && result.data.byteLength === 4) {
+                    const arduinoVel = new DataView(result.data.buffer).getFloat32(0, true);
+                    
+                    if (!isNaN(arduinoVel)) {
+                        const ratio = arduinoVel / avgSpeed;
+                        
+                        // Apply Speed safely
+                        if (videoEl.readyState >= 2) {
+                            videoEl.playbackRate = Math.max(0.06, Math.min(16, ratio));
+                        }
+
+                        // UI Updates
+                        displayEl.innerText = ratio.toFixed(2);
+                        hb.classList.toggle('active-hb'); // Heartbeat flicker
+                        
+                        // Echo back to Arduino
+                        const echo = ratio.toFixed(2) + "\n";
+                        await device.transferOut(epOut, encoder.encode(echo));
+                    }
+                }
+            } catch (e) {
                 isConnected = false;
-                break; 
+                break;
             }
         }
     }
-
-    // Re-lock if user leaves and comes back to the tab
-    document.addEventListener('visibilitychange', async () => {
-        if (wakeLock !== null && document.visibilityState === 'visible') {
-            await requestWakeLock();
-        }
-    });
 </script>
 </body>
 </html>
