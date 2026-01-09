@@ -3,25 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Video Speed Controller</title>
+    <title>Arduino Video Controller</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
-        
-        video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
-        
-        .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 12px; }
-        button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; }
+        .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
+        button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
-        .btn-connect:active { background: #218838; }
-        .btn-disconnect { background: #dc3545; color: white; }
-        
-        .file-input-wrapper { background: #eee; padding: 15px; border-radius: 10px; border: 2px dashed #ccc; position: relative; }
-        input[type="file"] { width: 100%; }
-
-        #status { margin-top: 10px; color: #666; font-size: 14px; height: 1.2em; }
-        .value-box { font-size: 42px; font-weight: bold; color: #007bff; margin: 10px 0; }
-        .label { font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px; }
+        .btn-play { background: #007bff; color: white; margin-top: 10px; }
+        .value-box { font-size: 42px; font-weight: bold; color: #007bff; }
+        #status { color: #666; font-size: 14px; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -29,20 +21,18 @@
 <div class="container">
     <h2>Video Speed Bridge</h2>
     
-    <video id="myVideo" controls loop muted playsinline>
+    <video id="myVideo" loop muted playsinline>
         Your browser does not support the video tag.
     </video>
 
     <div class="controls">
-        <div class="file-input-wrapper">
-            <input type="file" id="filePicker" accept="video/*">
-        </div>
-        <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
+        <input type="file" id="filePicker" accept="video/*">
+        <button id="playBtn" class="btn-play">1. LOAD & START VIDEO</button>
+        <button id="mainBtn" class="btn-connect">2. CONNECT ARDUINO</button>
     </div>
 
-    <div class="label">Current Playback Speed</div>
     <div class="value-box" id="display">1.0x</div>
-    <div id="status">Waiting for connection...</div>
+    <div id="status">Waiting...</div>
 </div>
 
 <script>
@@ -53,25 +43,30 @@
     let activeItf, epIn, epOut;
 
     const mainBtn = document.getElementById('mainBtn');
+    const playBtn = document.getElementById('playBtn');
     const statusEl = document.getElementById('status');
     const displayEl = document.getElementById('display');
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
 
-    // Load selected video file
+    // 1. Handle File Selection
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (file) {
-            const fileURL = URL.createObjectURL(file);
-            videoEl.src = fileURL;
-            videoEl.play();
-            statusEl.innerText = "Video Loaded & Playing";
+            videoEl.src = URL.createObjectURL(file);
+            statusEl.innerText = "Video file loaded.";
         }
+    });
+
+    // 2. IMPORTANT: User must click this to "Unlock" the video element
+    playBtn.addEventListener('click', () => {
+        videoEl.play();
+        statusEl.innerText = "Video playing - Logic Unlocked";
     });
 
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) await connect();
-        else await disconnect();
+        else location.reload(); // Simple way to reset everything
     });
 
     async function connect() {
@@ -81,7 +76,6 @@
             if (device.configuration === null) await device.selectConfiguration(1);
 
             let success = false;
-            // Iterate common Arduino interface numbers
             for (let itf of [2, 0, 1]) {
                 try {
                     await device.claimInterface(itf);
@@ -94,31 +88,16 @@
                     epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
                     epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
                     if (epIn && epOut) { success = true; break; }
-                } catch (e) { console.warn("Failed interface", itf); }
+                } catch (e) { }
             }
 
             if (success) {
                 isConnected = true;
-                mainBtn.innerText = "DISCONNECT ARDUINO";
-                mainBtn.className = "btn-disconnect";
-                statusEl.innerText = "Arduino Linked";
+                mainBtn.innerText = "DISCONNECT";
+                statusEl.innerText = "Arduino Connected!";
                 readLoop();
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
-    }
-
-    async function disconnect() {
-        isConnected = false;
-        try {
-            if (device) {
-                await device.releaseInterface(activeItf);
-                await device.close();
-            }
-        } catch (e) {}
-        mainBtn.innerText = "CONNECT ARDUINO";
-        mainBtn.className = "btn-connect";
-        statusEl.innerText = "Disconnected";
-        displayEl.innerText = "1.0x";
     }
 
     async function readLoop() {
@@ -127,25 +106,20 @@
                 const result = await device.transferIn(epIn, 64);
                 if (result.data && result.data.byteLength > 0) {
                     const text = decoder.decode(result.data).trim();
-                    if (text) {
-                        const floatVal = parseFloat(text);
-                        if (!isNaN(floatVal)) {
-                            // Display the speed on screen
-                            displayEl.innerText = floatVal.toFixed(1) + "x";
-                            
-                            // APPLY SPEED TO VIDEO
-                            // Note: Browsers usually support 0.06 to 16.0
-                            videoEl.playbackRate = floatVal;
-                        }
-                        // Echo to Arduino LCD
+                    
+                    // Logic to handle potential multiple values (though unlikely at 5s)
+                    const val = parseFloat(text);
+                    if (!isNaN(val)) {
+                        displayEl.innerText = val.toFixed(1) + "x";
+                        
+                        // Apply the speed to the video
+                        videoEl.playbackRate = val;
+                        
+                        // Echo back to Arduino LCD
                         await device.transferOut(epOut, encoder.encode(text + "\n"));
                     }
                 }
             } catch (e) { 
-                if (isConnected) {
-                    console.error(e);
-                    disconnect();
-                }
                 break; 
             }
         }
