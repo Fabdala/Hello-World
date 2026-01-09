@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hardware Sync Debug</title>
+    <title>Pro Micro Sync Bridge</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 15px; background: #f0f4f8; margin: 0; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 100%; max-width: 450px; box-sizing: border-box; }
@@ -14,28 +14,24 @@
         .btn-connect { background: #28a745; color: white; }
         .btn-fullscreen { background: #6f42c1; color: white; }
         .value-box { font-size: 42px; font-weight: bold; color: #007bff; margin: 5px 0; }
-        #debug { background: #222; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; text-align: left; border-radius: 8px; margin-top: 10px; height: 80px; overflow-y: auto; }
+        #debug { background: #222; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; text-align: left; border-radius: 8px; margin-top: 10px; height: 100px; overflow-y: auto; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <div id="videoWrapper"><video id="myVideo" loop muted playsinline></video></div>
-
     <div class="controls">
         <input type="file" id="filePicker" accept="video/*">
-        <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
+        <button id="mainBtn" class="btn-connect">CONNECT PRO MICRO</button>
         <button id="fullScreenBtn" class="btn-fullscreen">START & FULL SCREEN</button>
     </div>
-
-    <div id="mathDisplay" style="font-size: 14px; color: #555;">Select Video First</div>
     <div class="value-box" id="display">0.00x</div>
-    
-    <div id="debug">System Logs:<br>> Waiting for user...</div>
+    <div id="debug">Log: Waiting...</div>
 </div>
 
 <script>
-    let device, isConnected = false, avgSpeed = 1.0, wakeLock = null;
+    let device, isConnected = false, avgSpeed = 1.0;
     const encoder = new TextEncoder();
     const videoEl = document.getElementById('myVideo');
     const displayEl = document.getElementById('display');
@@ -46,97 +42,84 @@
         debugEl.scrollTop = debugEl.scrollHeight;
     }
 
-    // 1. File Picker
     document.getElementById('filePicker').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) {
-            const val = window.prompt("Average Speed (Baseline):", "30.0");
+            const val = window.prompt("Baseline Speed:", "30.0");
             avgSpeed = parseFloat(val) || 1.0;
             videoEl.src = URL.createObjectURL(file);
-            log(`Video loaded. Baseline: ${avgSpeed}`);
         }
     });
 
-    // 2. Full Screen & Wake Lock
     document.getElementById('fullScreenBtn').addEventListener('click', async () => {
-        if (!videoEl.src) return alert("Select video!");
-        try {
-            if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
-            const wrapper = document.getElementById('videoWrapper');
-            if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
-            await videoEl.play();
-            log("Playback & Fullscreen active");
-        } catch (e) { log("FS Error: " + e.message); }
+        const wrapper = document.getElementById('videoWrapper');
+        if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
+        videoEl.play();
     });
 
-    // 3. Robust USB Connection
     document.getElementById('mainBtn').addEventListener('click', async () => {
         try {
-            log("Requesting USB Device...");
+            log("Opening Pro Micro...");
             device = await navigator.usb.requestDevice({ filters: [] });
             await device.open();
             
-            if (device.configuration === null) await device.selectConfiguration(1);
-            
-            // Comprehensive Interface Search
-            let itfNum = -1, epIn = -1, epOut = -1;
-            for (const itf of device.configuration.interfaces) {
-                const alt = itf.alternates[0];
-                // Look for CDC Data or Vendor Specific
-                if (alt.interfaceClass === 0xff || alt.interfaceClass === 10 || alt.interfaceClass === 2) {
-                    itfNum = itf.interfaceNumber;
-                    for (const ep of alt.endpoints) {
-                        if (ep.direction === 'in') epIn = ep.endpointNumber;
-                        if (ep.direction === 'out') epOut = ep.endpointNumber;
+            // Pro Micros almost always use Configuration 1
+            await device.selectConfiguration(1);
+
+            // Interface 2 is usually where the CDC-Data lives on 32u4
+            let itfNum = 2; 
+            let epIn = 2, epOut = 2; // Defaults for many Pro Micros
+
+            // Detect actual endpoints
+            try {
+                const itf = device.configuration.interfaces[itfNum];
+                const endpoints = itf.alternates[0].endpoints;
+                epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+            } catch(e) {
+                log("Fallback: searching interfaces...");
+                // Search all if itf 2 fails
+                for(let i of device.configuration.interfaces) {
+                    if(i.alternates[0].endpoints.length >= 2) {
+                        itfNum = i.interfaceNumber;
+                        epIn = i.alternates[0].endpoints.find(e => e.direction === 'in').endpointNumber;
+                        epOut = i.alternates[0].endpoints.find(e => e.direction === 'out').endpointNumber;
                     }
-                    if (epIn !== -1 && epOut !== -1) break;
                 }
             }
 
-            if (itfNum === -1) throw new Error("No compatible Interface found");
-
             await device.claimInterface(itfNum);
-            // Set DTR to wake up Arduino Serial
-            await device.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 0x01, index: itfNum });
 
-            log(`Connected! Interface: ${itfNum}, In: ${epIn}, Out: ${epOut}`);
+            // THE WAKE UP CALL: 0x01 (DTR) and 0x02 (RTS)
+            await device.controlTransferOut({
+                requestType: 'class', recipient: 'interface',
+                request: 0x22, value: 0x03, index: itfNum
+            });
+
+            log(`Claimed Itf ${itfNum}. In:${epIn} Out:${epOut}`);
             isConnected = true;
-            document.getElementById('mainBtn').innerText = "DISCONNECT";
             readLoop(epIn, epOut);
-        } catch (err) { log("USB Error: " + err.message); }
+        } catch (err) { log("Error: " + err.message); }
     });
 
     async function readLoop(epIn, epOut) {
-        log("Read loop started...");
-        while (isConnected && device && device.opened) {
+        while (isConnected) {
             try {
                 const result = await device.transferIn(epIn, 4);
-                
-                if (result.status === 'ok' && result.data.byteLength === 4) {
-                    const view = new DataView(result.data.buffer);
-                    const vel = view.getFloat32(0, true);
+                if (result.data && result.data.byteLength === 4) {
+                    const vel = new DataView(result.data.buffer).getFloat32(0, true);
+                    const ratio = vel / avgSpeed;
+                    displayEl.innerText = ratio.toFixed(2) + "x";
                     
-                    if (!isNaN(vel)) {
-                        const ratio = vel / avgSpeed;
-                        displayEl.innerText = ratio.toFixed(2) + "x";
-                        
-                        if (videoEl.readyState >= 2) {
-                            videoEl.playbackRate = Math.max(0.06, Math.min(16, ratio));
-                        }
-                        
-                        // Echo to Arduino
-                        const msg = ratio.toFixed(2) + "\n";
-                        await device.transferOut(epOut, encoder.encode(msg));
+                    if (videoEl.readyState >= 2) {
+                        videoEl.playbackRate = Math.max(0.06, Math.min(16, ratio));
                     }
-                } else if (result.status === 'stall') {
-                    log("USB Stall - clearing...");
-                    await device.clearHalt('in', epIn);
+                    
+                    // Send back to Pro Micro
+                    const msg = ratio.toFixed(2) + "\n";
+                    await device.transferOut(epOut, encoder.encode(msg));
                 }
-            } catch (e) {
-                log("Loop Error: " + e.message);
-                isConnected = false;
-                break;
-            }
+            } catch (e) { isConnected = false; break; }
         }
     }
 </script>
