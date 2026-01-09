@@ -13,7 +13,7 @@
         button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
         .btn-fullscreen { background: #6f42c1; color: white; }
-        .btn-reset { background: #dc3545; color: white; font-size: 14px; padding: 10px; }
+        .btn-reset { background: #dc3545; color: white; font-size: 14px; padding: 10px; margin-top: 5px; }
         .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
         #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
         .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; min-height: 40px; }
@@ -31,7 +31,7 @@
         <input type="file" id="filePicker" accept="video/*">
         <button id="mainBtn" class="btn-connect">1. CONNECT ARDUINO</button>
         <button id="fullScreenBtn" class="btn-fullscreen">2. GO FULL SCREEN</button>
-        <button id="resetBtn" class="btn-reset">RESET / CHANGE VIDEO</button>
+        <button id="resetBtn" class="btn-reset">RESET / NEW VIDEO</button>
     </div>
 
     <div class="math-info" id="mathDisplay">Select Video & Connect Arduino</div>
@@ -50,35 +50,31 @@
     const videoEl = document.getElementById('myVideo'), videoWrapper = document.getElementById('videoWrapper');
     const filePicker = document.getElementById('filePicker');
 
-    // Wake Lock Request
+    // Robust Wake Lock Function
     async function requestWakeLock() {
         if ('wakeLock' in navigator) {
             try {
+                if (wakeLock !== null) return; // Already locked
                 wakeLock = await navigator.wakeLock.request('screen');
-                console.log("Wake Lock active!");
+                statusEl.innerText = "USB Link Active & Screen Locked ON";
+                
+                // Re-request if page is minimized/restored
+                wakeLock.addEventListener('release', () => { wakeLock = null; });
             } catch (err) { console.error(`${err.name}, ${err.message}`); }
         }
     }
 
-    // RESET FUNCTIONALITY
     resetBtn.addEventListener('click', async () => {
-        // Stop Video
         videoEl.pause();
         videoEl.src = "";
-        
-        // Release Wake Lock
         if (wakeLock) {
             await wakeLock.release();
             wakeLock = null;
         }
-
-        // Reset Variables
         hasStartedVideo = false;
         displayEl.innerText = "0.00x";
-        mathDisplay.innerText = "Select Video & Connect Arduino";
-        statusEl.innerText = "System Reset.";
-        
-        // Clear file input
+        mathDisplay.innerText = "System Reset. Ready for new video.";
+        statusEl.innerText = "Screen lock released.";
         filePicker.value = "";
     });
 
@@ -88,12 +84,13 @@
             const userInput = window.prompt("Enter Average Speed (Baseline):", "30.0");
             avgSpeed = parseFloat(userInput) || 1.0;
             videoEl.src = URL.createObjectURL(file);
-            mathDisplay.innerHTML = `Ready: Avg Speed ${avgSpeed}`;
+            mathDisplay.innerHTML = `Loaded: Avg Speed ${avgSpeed}`;
         }
     });
 
-    fullScreenBtn.addEventListener('click', () => {
+    fullScreenBtn.addEventListener('click', async () => {
         if (!videoEl.src) return alert("Select video first");
+        await requestWakeLock(); // Request again when going full screen
         if (videoWrapper.requestFullscreen) videoWrapper.requestFullscreen();
         else if (videoWrapper.webkitRequestFullscreen) videoWrapper.webkitRequestFullscreen();
         videoEl.play();
@@ -107,6 +104,7 @@
         } else {
             isConnected = false;
             if (device) await device.close();
+            if (wakeLock) await wakeLock.release();
             mainBtn.innerText = "1. CONNECT ARDUINO";
             statusEl.innerText = "Arduino Disconnected.";
         }
@@ -132,7 +130,6 @@
             if (success) {
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Hardware Linked & Screen Locked On";
                 readLoop();
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
@@ -161,6 +158,13 @@
             }
         }
     }
+
+    // Re-lock if user leaves and comes back to the tab
+    document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible') {
+            await requestWakeLock();
+        }
+    });
 </script>
 </body>
 </html>
