@@ -3,104 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pro Micro Sync Bridge</title>
+    <title>Pro Micro Fix</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 15px; background: #f0f4f8; margin: 0; }
-        .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 100%; max-width: 450px; box-sizing: border-box; }
-        #videoWrapper { width: 100%; background: #000; border-radius: 10px; overflow: hidden; margin-top: 15px; min-height: 180px; }
-        video { width: 100%; display: block; }
-        .controls { margin: 15px 0; display: flex; flex-direction: column; gap: 8px; }
-        button { padding: 12px; font-size: 15px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
+        .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 450px; }
+        video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; }
+        .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
+        button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
         .btn-fullscreen { background: #6f42c1; color: white; }
-        .value-box { font-size: 42px; font-weight: bold; color: #007bff; margin: 5px 0; }
-        #debug { background: #222; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; text-align: left; border-radius: 8px; margin-top: 10px; height: 100px; overflow-y: auto; }
+        .value-box { font-size: 48px; font-weight: bold; color: #007bff; }
+        #debug { background: #222; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; text-align: left; margin-top: 10px; border-radius: 5px; height: 60px; overflow: auto; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <div id="videoWrapper"><video id="myVideo" loop muted playsinline></video></div>
+    <video id="myVideo" loop muted playsinline></video>
+
     <div class="controls">
         <input type="file" id="filePicker" accept="video/*">
         <button id="mainBtn" class="btn-connect">CONNECT PRO MICRO</button>
-        <button id="fullScreenBtn" class="btn-fullscreen">START & FULL SCREEN</button>
+        <button id="fullBtn" class="btn-fullscreen">GO FULL SCREEN</button>
     </div>
+
     <div class="value-box" id="display">0.00x</div>
-    <div id="debug">Log: Waiting...</div>
+    <div id="debug">Log: Standby</div>
 </div>
 
 <script>
     let device, isConnected = false, avgSpeed = 1.0;
-    const encoder = new TextEncoder();
     const videoEl = document.getElementById('myVideo');
     const displayEl = document.getElementById('display');
     const debugEl = document.getElementById('debug');
+    const encoder = new TextEncoder();
 
-    function log(msg) {
-        debugEl.innerHTML += `<br>> ${msg}`;
-        debugEl.scrollTop = debugEl.scrollHeight;
-    }
+    function log(m) { debugEl.innerHTML += `<br>> ${m}`; debugEl.scrollTop = debugEl.scrollHeight; }
 
-    document.getElementById('filePicker').addEventListener('change', (e) => {
+    document.getElementById('filePicker').onchange = (e) => {
         const file = e.target.files[0];
         if (file) {
             const val = window.prompt("Baseline Speed:", "30.0");
             avgSpeed = parseFloat(val) || 1.0;
             videoEl.src = URL.createObjectURL(file);
         }
-    });
+    };
 
-    document.getElementById('fullScreenBtn').addEventListener('click', async () => {
-        const wrapper = document.getElementById('videoWrapper');
-        if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
+    document.getElementById('fullBtn').onclick = () => {
+        if (videoEl.requestFullscreen) videoEl.requestFullscreen();
         videoEl.play();
-    });
+    };
 
-    document.getElementById('mainBtn').addEventListener('click', async () => {
+    document.getElementById('mainBtn').onclick = async () => {
         try {
-            log("Opening Pro Micro...");
             device = await navigator.usb.requestDevice({ filters: [] });
             await device.open();
-            
-            // Pro Micros almost always use Configuration 1
             await device.selectConfiguration(1);
 
-            // Interface 2 is usually where the CDC-Data lives on 32u4
-            let itfNum = 2; 
-            let epIn = 2, epOut = 2; // Defaults for many Pro Micros
-
-            // Detect actual endpoints
-            try {
-                const itf = device.configuration.interfaces[itfNum];
-                const endpoints = itf.alternates[0].endpoints;
-                epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
-                epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
-            } catch(e) {
-                log("Fallback: searching interfaces...");
-                // Search all if itf 2 fails
-                for(let i of device.configuration.interfaces) {
-                    if(i.alternates[0].endpoints.length >= 2) {
-                        itfNum = i.interfaceNumber;
-                        epIn = i.alternates[0].endpoints.find(e => e.direction === 'in').endpointNumber;
-                        epOut = i.alternates[0].endpoints.find(e => e.direction === 'out').endpointNumber;
-                    }
+            // AUTO-DETECT DATA INTERFACE
+            let itfNum = -1, epIn = -1, epOut = -1;
+            for (const itf of device.configuration.interfaces) {
+                const alt = itf.alternates[0];
+                if (alt.endpoints.length >= 2) {
+                    itfNum = itf.interfaceNumber;
+                    epIn = alt.endpoints.find(e => e.direction === 'in').endpointNumber;
+                    epOut = alt.endpoints.find(e => e.direction === 'out').endpointNumber;
+                    break;
                 }
             }
 
             await device.claimInterface(itfNum);
-
-            // THE WAKE UP CALL: 0x01 (DTR) and 0x02 (RTS)
+            
+            // PRO MICRO WAKEUP (DTR/RTS)
             await device.controlTransferOut({
                 requestType: 'class', recipient: 'interface',
                 request: 0x22, value: 0x03, index: itfNum
             });
 
-            log(`Claimed Itf ${itfNum}. In:${epIn} Out:${epOut}`);
+            log("Linked! Itf:" + itfNum);
             isConnected = true;
             readLoop(epIn, epOut);
-        } catch (err) { log("Error: " + err.message); }
-    });
+        } catch (err) { log("USB Error: " + err.message); }
+    };
 
     async function readLoop(epIn, epOut) {
         while (isConnected) {
@@ -110,14 +94,10 @@
                     const vel = new DataView(result.data.buffer).getFloat32(0, true);
                     const ratio = vel / avgSpeed;
                     displayEl.innerText = ratio.toFixed(2) + "x";
-                    
                     if (videoEl.readyState >= 2) {
                         videoEl.playbackRate = Math.max(0.06, Math.min(16, ratio));
                     }
-                    
-                    // Send back to Pro Micro
-                    const msg = ratio.toFixed(2) + "\n";
-                    await device.transferOut(epOut, encoder.encode(msg));
+                    await device.transferOut(epOut, encoder.encode(ratio.toFixed(2) + "\n"));
                 }
             } catch (e) { isConnected = false; break; }
         }
