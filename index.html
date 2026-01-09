@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Video Controller</title>
+    <title>Arduino Binary Video Control</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
@@ -11,15 +11,16 @@
         .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
         button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
-        .btn-play { background: #007bff; color: white; margin-top: 10px; }
-        .value-box { font-size: 42px; font-weight: bold; color: #007bff; }
-        #status { color: #666; font-size: 14px; margin-top: 10px; }
+        .btn-play { background: #007bff; color: white; }
+        .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 10px 0; }
+        #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
+        .label { font-size: 12px; color: #999; text-transform: uppercase; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Video Speed Bridge</h2>
+    <h2>Binary Video Bridge</h2>
     
     <video id="myVideo" loop muted playsinline>
         Your browser does not support the video tag.
@@ -27,18 +28,18 @@
 
     <div class="controls">
         <input type="file" id="filePicker" accept="video/*">
-        <button id="playBtn" class="btn-play">1. LOAD & START VIDEO</button>
+        <button id="playBtn" class="btn-play">1. START VIDEO</button>
         <button id="mainBtn" class="btn-connect">2. CONNECT ARDUINO</button>
     </div>
 
+    <div class="label">Hardware Speed Input</div>
     <div class="value-box" id="display">1.0x</div>
-    <div id="status">Waiting...</div>
+    <div id="status">Waiting for binary data (4 bytes)...</div>
 </div>
 
 <script>
     let device;
     let isConnected = false;
-    const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     let activeItf, epIn, epOut;
 
@@ -49,24 +50,24 @@
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
 
-    // 1. Handle File Selection
+    // 1. Load Video
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (file) {
             videoEl.src = URL.createObjectURL(file);
-            statusEl.innerText = "Video file loaded.";
+            statusEl.innerText = "Video loaded.";
         }
     });
 
-    // 2. IMPORTANT: User must click this to "Unlock" the video element
+    // 2. Unlock Video Control
     playBtn.addEventListener('click', () => {
         videoEl.play();
-        statusEl.innerText = "Video playing - Logic Unlocked";
+        statusEl.innerText = "Video Unlocked - Ready for Arduino";
     });
 
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) await connect();
-        else location.reload(); // Simple way to reset everything
+        else location.reload(); 
     });
 
     async function connect() {
@@ -94,7 +95,7 @@
             if (success) {
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Arduino Connected!";
+                statusEl.innerText = "Binary Stream Active";
                 readLoop();
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
@@ -103,23 +104,31 @@
     async function readLoop() {
         while (isConnected && device && device.opened) {
             try {
-                const result = await device.transferIn(epIn, 64);
-                if (result.data && result.data.byteLength > 0) {
-                    const text = decoder.decode(result.data).trim();
+                // We specifically request 4 bytes (the size of an Arduino float)
+                const result = await device.transferIn(epIn, 4);
+                
+                if (result.data && result.data.byteLength === 4) {
+                    // Create a DataView to parse the raw binary buffer
+                    // Arduino uses Little Endian (least significant byte first)
+                    const view = new DataView(result.data.buffer);
+                    const floatVal = view.getFloat32(0, true); 
                     
-                    // Logic to handle potential multiple values (though unlikely at 5s)
-                    const val = parseFloat(text);
-                    if (!isNaN(val)) {
-                        displayEl.innerText = val.toFixed(1) + "x";
+                    if (!isNaN(floatVal)) {
+                        // UI Update
+                        displayEl.innerText = floatVal.toFixed(1) + "x";
                         
-                        // Apply the speed to the video
-                        videoEl.playbackRate = val;
-                        
-                        // Echo back to Arduino LCD
-                        await device.transferOut(epOut, encoder.encode(text + "\n"));
+                        // Hardware-to-Video mapping
+                        if (videoEl.readyState >= 2) {
+                            videoEl.playbackRate = floatVal;
+                        }
+
+                        // Echo back as string for the LCD
+                        const echoStr = floatVal.toFixed(1) + "\n";
+                        await device.transferOut(epOut, encoder.encode(echoStr));
                     }
                 }
             } catch (e) { 
+                console.error("Binary Read Error:", e);
                 break; 
             }
         }
