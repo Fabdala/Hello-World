@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Controller (Always On)</title>
+    <title>Arduino Hardware Control</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; margin: 0; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
@@ -13,6 +13,7 @@
         button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
         .btn-fullscreen { background: #6f42c1; color: white; }
+        .btn-reset { background: #dc3545; color: white; font-size: 14px; padding: 10px; }
         .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
         #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
         .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; min-height: 40px; }
@@ -30,6 +31,7 @@
         <input type="file" id="filePicker" accept="video/*">
         <button id="mainBtn" class="btn-connect">1. CONNECT ARDUINO</button>
         <button id="fullScreenBtn" class="btn-fullscreen">2. GO FULL SCREEN</button>
+        <button id="resetBtn" class="btn-reset">RESET / CHANGE VIDEO</button>
     </div>
 
     <div class="math-info" id="mathDisplay">Select Video & Connect Arduino</div>
@@ -43,9 +45,10 @@
     let activeItf, epIn, epOut;
 
     const mainBtn = document.getElementById('mainBtn'), fullScreenBtn = document.getElementById('fullScreenBtn');
-    const statusEl = document.getElementById('status'), displayEl = document.getElementById('display');
-    const mathDisplay = document.getElementById('mathDisplay'), videoEl = document.getElementById('myVideo');
-    const videoWrapper = document.getElementById('videoWrapper'), filePicker = document.getElementById('filePicker');
+    const resetBtn = document.getElementById('resetBtn'), statusEl = document.getElementById('status');
+    const displayEl = document.getElementById('display'), mathDisplay = document.getElementById('mathDisplay');
+    const videoEl = document.getElementById('myVideo'), videoWrapper = document.getElementById('videoWrapper');
+    const filePicker = document.getElementById('filePicker');
 
     // Wake Lock Request
     async function requestWakeLock() {
@@ -56,6 +59,28 @@
             } catch (err) { console.error(`${err.name}, ${err.message}`); }
         }
     }
+
+    // RESET FUNCTIONALITY
+    resetBtn.addEventListener('click', async () => {
+        // Stop Video
+        videoEl.pause();
+        videoEl.src = "";
+        
+        // Release Wake Lock
+        if (wakeLock) {
+            await wakeLock.release();
+            wakeLock = null;
+        }
+
+        // Reset Variables
+        hasStartedVideo = false;
+        displayEl.innerText = "0.00x";
+        mathDisplay.innerText = "Select Video & Connect Arduino";
+        statusEl.innerText = "System Reset.";
+        
+        // Clear file input
+        filePicker.value = "";
+    });
 
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
@@ -78,10 +103,12 @@
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
             await connect();
-            await requestWakeLock(); // Lock screen on as soon as Arduino connects
+            await requestWakeLock();
         } else {
-            if (wakeLock) wakeLock.release();
-            location.reload();
+            isConnected = false;
+            if (device) await device.close();
+            mainBtn.innerText = "1. CONNECT ARDUINO";
+            statusEl.innerText = "Arduino Disconnected.";
         }
     });
 
@@ -128,7 +155,10 @@
                         await device.transferOut(epOut, encoder.encode(calculatedRatio.toFixed(2) + "\n"));
                     }
                 }
-            } catch (e) { break; }
+            } catch (e) { 
+                isConnected = false;
+                break; 
+            }
         }
     }
 </script>
