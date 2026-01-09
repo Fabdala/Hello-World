@@ -134,7 +134,7 @@
                     
                     if (!isNaN(arduinoVel)) {
                         // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
-                        const calculatedRatio = (arduinoVel / avgSpeed) + 30.0;
+                        const calculatedRatio = arduinoVel / avgSpeed;
 
                         // Update UI
                         displayEl.innerText = calculatedRatio.toFixed(2) + "x";
