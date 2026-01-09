@@ -3,24 +3,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Pro Micro Bridge</title>
+    <title>Arduino Video Controller</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
-        .container { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; min-width: 300px; }
-        button { padding: 15px 30px; font-size: 18px; border: none; border-radius: 10px; cursor: pointer; transition: 0.3s; width: 100%; }
+        .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 90%; max-width: 500px; }
+        
+        video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; }
+        
+        .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
+        button { padding: 12px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; }
         .btn-connect { background: #28a745; color: white; }
         .btn-disconnect { background: #dc3545; color: white; }
-        #status { margin-top: 15px; color: #666; font-style: italic; min-height: 1.2em; }
-        .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 20px 0; }
+        
+        .file-input { padding: 10px; background: #eee; border-radius: 10px; border: 2px dashed #ccc; }
+        .value-box { font-size: 32px; font-weight: bold; color: #007bff; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>USB Bridge</h2>
-    <div id="status">Ready to connect</div>
+    <h2>Video Bridge</h2>
+    
+    <video id="myVideo" controls loop muted>
+        Your browser does not support the video tag.
+    </video>
+
+    <div class="controls">
+        <input type="file" id="filePicker" accept="video/*" class="file-input">
+        <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
+    </div>
+
+    <div id="status">Ready</div>
     <div class="value-box" id="display">0.0</div>
-    <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
 </div>
 
 <script>
@@ -28,20 +42,28 @@
     let isConnected = false;
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
-    let activeItf = null;
-    let epIn = null;
-    let epOut = null;
+    let activeItf, epIn, epOut;
 
     const mainBtn = document.getElementById('mainBtn');
     const statusEl = document.getElementById('status');
     const displayEl = document.getElementById('display');
+    const videoEl = document.getElementById('myVideo');
+    const filePicker = document.getElementById('filePicker');
+
+    // Handle Video File Selection
+    filePicker.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            const fileURL = URL.createObjectURL(file);
+            videoEl.src = fileURL;
+            videoEl.play();
+            statusEl.innerText = "Video Loaded";
+        }
+    });
 
     mainBtn.addEventListener('click', async () => {
-        if (!isConnected) {
-            await connect();
-        } else {
-            await disconnect();
-        }
+        if (!isConnected) await connect();
+        else await disconnect();
     });
 
     async function connect() {
@@ -63,35 +85,28 @@
                     epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
                     epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
                     if (epIn && epOut) { success = true; break; }
-                } catch (e) { console.log(`Itf ${itf} failed.`); }
+                } catch (e) { }
             }
 
             if (success) {
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
                 mainBtn.className = "btn-disconnect";
-                statusEl.innerText = "Connected!";
-                statusEl.style.color = "green";
+                statusEl.innerText = "Arduino Connected";
                 readLoop();
             }
-        } catch (err) {
-            statusEl.innerText = "Error: " + err.message;
-        }
+        } catch (err) { statusEl.innerText = "Error: " + err.message; }
     }
 
     async function disconnect() {
         isConnected = false;
-        try {
-            if (device) {
-                await device.releaseInterface(activeItf);
-                await device.close();
-            }
-        } catch (e) { console.error("Error during disconnect:", e); }
+        if (device) {
+            await device.releaseInterface(activeItf);
+            await device.close();
+        }
         mainBtn.innerText = "CONNECT ARDUINO";
         mainBtn.className = "btn-connect";
-        statusEl.innerText = "Disconnected.";
-        statusEl.style.color = "#666";
-        displayEl.innerText = "0.0";
+        statusEl.innerText = "Disconnected";
     }
 
     async function readLoop() {
@@ -101,21 +116,20 @@
                 if (result.data && result.data.byteLength > 0) {
                     const text = decoder.decode(result.data).trim();
                     if (text) {
-                        // Handle the Float logic here
                         const floatVal = parseFloat(text);
                         if (!isNaN(floatVal)) {
                             displayEl.innerText = floatVal.toFixed(1);
+                            
+                            // --- FUTURE SPOT FOR PLAYBACK SPEED LOGIC ---
+                            // Example: videoEl.playbackRate = floatVal / 10;
                         }
-                        // Echo back
+                        // Simple echo (can be removed if LCD lag is annoying)
                         await device.transferOut(epOut, encoder.encode(text + "\n"));
                     }
                 }
-            } catch (e) {
-                if (isConnected) {
-                    console.error("Read Error:", e);
-                    disconnect();
-                }
-                break;
+            } catch (e) { 
+                if (isConnected) disconnect();
+                break; 
             }
         }
     }
