@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Binary Video Control</title>
+    <title>Arduino Hardware Trigger Video</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
@@ -11,17 +11,16 @@
         .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
         button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
         .btn-connect { background: #28a745; color: white; }
-        .btn-play { background: #007bff; color: white; }
+        .btn-reset { background: #6c757d; color: white; margin-top: 10px; font-size: 12px; padding: 8px; }
         .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
         #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
-        .label { font-size: 12px; color: #999; text-transform: uppercase; margin-top: 10px; }
         .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Dynamic Speed Bridge</h2>
+    <h2>Hardware Triggered Video</h2>
     
     <video id="myVideo" loop muted playsinline>
         Your browser does not support the video tag.
@@ -29,63 +28,51 @@
 
     <div class="controls">
         <input type="file" id="filePicker" accept="video/*">
-        <button id="playBtn" class="btn-play">1. START VIDEO</button>
-        <button id="mainBtn" class="btn-connect">2. CONNECT ARDUINO</button>
+        <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
+        <button onclick="location.reload()" class="btn-reset">RESET ALL</button>
     </div>
 
     <div class="math-info" id="mathDisplay">
-        Select a video to set Average Speed
+        1. Select Video <br> 2. Connect Arduino
     </div>
 
-    <div class="label">Calculated Playback Ratio</div>
-    <div class="value-box" id="display">1.00x</div>
-    
-    <div id="status">Waiting for binary data...</div>
+    <div class="value-box" id="display">0.00x</div>
+    <div id="status">Waiting for user...</div>
 </div>
 
 <script>
     let device;
     let isConnected = false;
-    let avgSpeed = 1.0; // Global variable to store the baseline
+    let hasStartedVideo = false; // Flag to handle the auto-start logic
+    let avgSpeed = 1.0; 
     const encoder = new TextEncoder();
     let activeItf, epIn, epOut;
 
     const mainBtn = document.getElementById('mainBtn');
-    const playBtn = document.getElementById('playBtn');
     const statusEl = document.getElementById('status');
     const displayEl = document.getElementById('display');
     const mathDisplay = document.getElementById('mathDisplay');
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
 
-    // 1. Load Video & Ask for Average Speed
+    // 1. Load Video File
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (file) {
-            // STEP: Ask user for the average speed
-            const userInput = window.prompt("Enter the Average Speed for this video:", "10.0");
-            
-            // Validate and store the value
+            const userInput = window.prompt("Enter Average Speed (Baseline):", "30.0");
             const parsed = parseFloat(userInput);
-            if (!isNaN(parsed) && parsed > 0) {
-                avgSpeed = parsed;
-            } else {
-                avgSpeed = 1.0;
-                alert("Invalid input. Using 1.0 as default.");
-            }
+            avgSpeed = (!isNaN(parsed) && parsed > 0) ? parsed : 1.0;
 
             videoEl.src = URL.createObjectURL(file);
-            mathDisplay.innerText = `Baseline: ${avgSpeed}`;
-            statusEl.innerText = "Video loaded. Ready to start.";
+            videoEl.pause(); // Ensure it is paused initially
+            hasStartedVideo = false; // Reset start flag
+            
+            mathDisplay.innerHTML = `Video Loaded.<br>Waiting for Arduino to start playback...`;
+            statusEl.innerText = "Ready for hardware signal.";
         }
     });
 
-    // 2. Unlock Video Control
-    playBtn.addEventListener('click', () => {
-        videoEl.play();
-        statusEl.innerText = "Video Unlocked & Playing";
-    });
-
+    // 2. USB Connection Logic
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) await connect();
         else location.reload(); 
@@ -116,16 +103,16 @@
             if (success) {
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Binary Stream Connected";
+                statusEl.innerText = "USB Link Active";
                 readLoop();
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
     }
 
+    // 3. Binary Read Loop with Trigger
     async function readLoop() {
         while (isConnected && device && device.opened) {
             try {
-                // Read 4 bytes from Arduino
                 const result = await device.transferIn(epIn, 4);
                 
                 if (result.data && result.data.byteLength === 4) {
@@ -133,27 +120,34 @@
                     const arduinoVel = view.getFloat32(0, true); 
                     
                     if (!isNaN(arduinoVel)) {
-                        // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
-                        const calculatedRatio = arduinoVel / avgSpeed;
+                        
+                        // TRIGGER LOGIC: If we have a video loaded but not playing, START IT
+                        if (!hasStartedVideo && videoEl.src) {
+                            videoEl.play().then(() => {
+                                hasStartedVideo = true;
+                                statusEl.innerText = "Playback Triggered by Arduino!";
+                            }).catch(err => {
+                                statusEl.innerText = "Click video once to allow playback";
+                                console.log("Playback blocked:", err);
+                            });
+                        }
 
-                        // Update UI
+                        // Calculate and Apply Ratio
+                        const calculatedRatio = arduinoVel / avgSpeed;
                         displayEl.innerText = calculatedRatio.toFixed(2) + "x";
                         mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${calculatedRatio.toFixed(2)}`;
                         
-                        // Apply to Video with safety limits (0.06x to 16x)
                         if (videoEl.readyState >= 2) {
+                            // Clamp speed between 0.06x and 16x
                             videoEl.playbackRate = Math.max(0.06, Math.min(16, calculatedRatio));
                         }
 
-                        // Echo back for Arduino LCD
+                        // Echo back to Arduino
                         const echoStr = calculatedRatio.toFixed(2) + "\n";
                         await device.transferOut(epOut, encoder.encode(echoStr));
                     }
                 }
-            } catch (e) { 
-                console.error("Binary Read Error:", e);
-                break; 
-            }
+            } catch (e) { break; }
         }
     }
 </script>
