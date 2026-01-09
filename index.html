@@ -7,10 +7,13 @@
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
         .container { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; min-width: 300px; }
-        button { padding: 15px 30px; font-size: 18px; border: none; border-radius: 10px; cursor: pointer; transition: 0.2s; }
-        #connect { background: #28a745; color: white; }
-        #connect:hover { background: #218838; }
-        #status { margin-top: 15px; color: #666; font-style: italic; }
+        
+        /* Button Styles */
+        button { padding: 15px 30px; font-size: 18px; border: none; border-radius: 10px; cursor: pointer; transition: 0.3s; width: 100%; }
+        .btn-connect { background: #28a745; color: white; }
+        .btn-disconnect { background: #dc3545; color: white; }
+        
+        #status { margin-top: 15px; color: #666; font-style: italic; min-height: 1.2em; }
         .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 20px 0; }
     </style>
 </head>
@@ -18,78 +21,110 @@
 
 <div class="container">
     <h2>USB Bridge</h2>
-    <div id="status">Status: Waiting for Connect</div>
+    <div id="status">Ready to connect</div>
     <div class="value-box" id="display">0</div>
-    <button id="connect">CONNECT ARDUINO</button>
+    <button id="mainBtn" class="btn-connect">CONNECT ARDUINO</button>
 </div>
 
 <script>
     let device;
-const decoder = new TextDecoder();
-const encoder = new TextEncoder();
+    let isConnected = false;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let activeItf = null;
+    let epIn = null;
+    let epOut = null;
 
-document.getElementById('connect').addEventListener('click', async () => {
+    const mainBtn = document.getElementById('mainBtn');
     const statusEl = document.getElementById('status');
-    try {
-        device = await navigator.usb.requestDevice({ filters: [] });
-        await device.open();
-        if (device.configuration === null) await device.selectConfiguration(1);
-
-        // Try interfaces 2, then 0, then 1 (CDC standard)
-        let success = false;
-        for (let itf of [2, 0, 1]) {
-            try {
-                await device.claimInterface(itf);
-                
-                // Set DTR Signal so Pro Micro starts sending
-                await device.controlTransferOut({
-                    requestType: 'class', recipient: 'interface',
-                    request: 0x22, value: 0x01, index: itf
-                });
-
-                // Check if this interface actually has "Bulk" endpoints (the data pipes)
-                const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
-                const inEndpoint = endpoints.find(e => e.direction === 'in');
-                const outEndpoint = endpoints.find(e => e.direction === 'out');
-
-                if (inEndpoint && outEndpoint) {
-                    statusEl.innerText = `Connected! Interface: ${itf}, EP: ${inEndpoint.endpointNumber}`;
-                    statusEl.style.color = "green";
-                    readLoop(itf, inEndpoint.endpointNumber, outEndpoint.endpointNumber);
-                    success = true;
-                    break;
-                }
-            } catch (e) { console.log(`Itf ${itf} failed.`); }
-        }
-
-        if (!success) statusEl.innerText = "Connected, but no data pipes found.";
-
-    } catch (err) {
-        statusEl.innerText = "Error: " + err.message;
-    }
-});
-
-async function readLoop(itf, epIn, epOut) {
     const displayEl = document.getElementById('display');
-    while (device && device.opened) {
+
+    mainBtn.addEventListener('click', async () => {
+        if (!isConnected) {
+            await connect();
+        } else {
+            await disconnect();
+        }
+    });
+
+    async function connect() {
         try {
-            // Read from the identified IN endpoint
-            const result = await device.transferIn(epIn, 64);
-            
-            if (result.data && result.data.byteLength > 0) {
-                const text = decoder.decode(result.data).trim();
-                if (text) {
-                    displayEl.innerText = text;
-                    // ECHO: Send back through identified OUT endpoint
-                    await device.transferOut(epOut, encoder.encode(text + "\n"));
-                }
+            device = await navigator.usb.requestDevice({ filters: [] });
+            await device.open();
+            if (device.configuration === null) await device.selectConfiguration(1);
+
+            let success = false;
+            for (let itf of [2, 0, 1]) {
+                try {
+                    await device.claimInterface(itf);
+                    activeItf = itf;
+
+                    await device.controlTransferOut({
+                        requestType: 'class', recipient: 'interface',
+                        request: 0x22, value: 0x01, index: itf
+                    });
+
+                    const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
+                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+
+                    if (epIn && epOut) {
+                        success = true;
+                        break;
+                    }
+                } catch (e) { console.log(`Itf ${itf} failed.`); }
             }
-        } catch (e) {
-            console.error("Loop Error:", e);
-            break;
+
+            if (success) {
+                isConnected = true;
+                mainBtn.innerText = "DISCONNECT";
+                mainBtn.className = "btn-disconnect";
+                statusEl.innerText = "Connected!";
+                statusEl.style.color = "green";
+                readLoop();
+            }
+        } catch (err) {
+            statusEl.innerText = "Error: " + err.message;
         }
     }
-}
+
+    async function disconnect() {
+        isConnected = false;
+        try {
+            if (device) {
+                await device.releaseInterface(activeItf);
+                await device.close();
+            }
+        } catch (e) { console.error("Error during disconnect:", e); }
+        
+        mainBtn.innerText = "CONNECT ARDUINO";
+        mainBtn.className = "btn-connect";
+        statusEl.innerText = "Disconnected.";
+        statusEl.style.color = "#666";
+        displayEl.innerText = "0";
+    }
+
+    async function readLoop() {
+        while (isConnected && device && device.opened) {
+            try {
+                const result = await device.transferIn(epIn, 64);
+                if (result.data && result.data.byteLength > 0) {
+                    const text = decoder.decode(result.data).trim();
+                    if (text) {
+                        displayEl.innerText = text;
+                        // Echo back
+                        await device.transferOut(epOut, encoder.encode(text + "\n"));
+                    }
+                }
+            } catch (e) {
+                if (isConnected) { // Only show error if we didn't mean to disconnect
+                    console.error("Read Error:", e);
+                    disconnect();
+                }
+                break;
+            }
+        }
+    }
 </script>
 </body>
 </html>
