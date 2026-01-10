@@ -119,11 +119,6 @@
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
                 statusEl.innerText = "Binary Stream Connected";
-                 if (videoEl.requestFullscreen) {
-                    videoEl.requestFullscreen();
-                    } else if (videoEl.webkitRequestFullscreen) { // Safari/iOS support
-                        videoEl.webkitRequestFullscreen();
-                        }
                 readLoop();
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
