@@ -63,7 +63,7 @@
         const file = event.target.files[0];
         if (file) {
             // STEP: Ask user for the average speed
-            const userInput = window.prompt("Enter the Average Speed for this video:", "10.0");
+            const userInput = window.prompt("Enter the Average Speed for this video:", "30.0");
             
             // Validate and store the value
             const parsed = parseFloat(userInput);
@@ -131,6 +131,9 @@
                 if (result.data && result.data.byteLength === 4) {
                     const view = new DataView(result.data.buffer);
                     const arduinoVel = view.getFloat32(0, true); 
+                    
+                    if (arduinoVel>0 )videoEl.play();
+                    if (arduinoVel<0 )videoEl.pause();
                     
                     if (!isNaN(arduinoVel)) {
                         // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
