@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bike Speed Video Control</title>
+    <title>Arduino Binary Video Control</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; transition: filter 0.3s; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
         video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; }
         .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
@@ -14,6 +14,7 @@
         .btn-play { background: #007bff; color: white; }
         .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
         #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
+        .label { font-size: 12px; color: #999; text-transform: uppercase; margin-top: 10px; }
         .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; }
     </style>
 </head>
@@ -32,9 +33,10 @@
         <button id="mainBtn" class="btn-connect">2. CONNECT ARDUINO</button>
     </div>
 
-    <div class="math-info" id="mathDisplay">Select video & set Avg Speed</div>
+    <div class="math-info" id="mathDisplay">Select a video to set Average Speed</div>
+    <div class="label">Calculated Playback Ratio</div>
     <div class="value-box" id="display">1.00x</div>
-    <div id="status">Waiting for bike data...</div>
+    <div id="status">Waiting for binary data...</div>
 </div>
 
 <script>
@@ -42,7 +44,8 @@
     let isConnected = false;
     let avgSpeed = 1.0;
     let wakeLock = null;
-    let epIn; // Only need Input endpoint now
+    const encoder = new TextEncoder();
+    let activeItf, epIn, epOut;
 
     const mainBtn = document.getElementById('mainBtn');
     const playBtn = document.getElementById('playBtn');
@@ -58,9 +61,18 @@
         try {
             if ('wakeLock' in navigator) {
                 wakeLock = await navigator.wakeLock.request('screen');
+                console.log("Wake Lock is active!");
             }
-        } catch (err) { console.error(err); }
+        } catch (err) {
+            console.error(`${err.name}, ${err.message}`);
+        }
     }
+
+    document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible') {
+            await requestWakeLock();
+        }
+    });
 
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
@@ -70,6 +82,7 @@
             avgSpeed = (!isNaN(parsed) && parsed > 0) ? parsed : 1.0;
             videoEl.src = URL.createObjectURL(file);
             mathDisplay.innerText = `Baseline: ${avgSpeed}`;
+            statusEl.innerText = "Video loaded. Ready to start.";
         }
     });
 
@@ -77,14 +90,23 @@
         await requestWakeLock();
         videoEl.play();
         videoEl.pause();
-        statusEl.innerText = "Video Ready & Screen Awake";
+        statusEl.innerText = "Video Unlocked & WakeLock Active";
     });
 
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
             await requestWakeLock(); 
             await connect();
-            if (videoEl.requestFullscreen) await videoEl.requestFullscreen();
+
+            try {
+                if (videoEl.requestFullscreen) {
+                    await videoEl.requestFullscreen();
+                } else if (videoEl.webkitRequestFullscreen) {
+                    await videoEl.webkitRequestFullscreen();
+                }
+            } catch (err) {
+                console.error(`Fullscreen error: ${err.message}`);
+            }
         } else {
             location.reload();
         }
@@ -100,68 +122,91 @@
             for (let itf of [2, 0, 1]) {
                 try {
                     await device.claimInterface(itf);
-                    
-                    // Simple Baud Rate Config
-                    const baudData = new Uint8Array([0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x08]);
+                    activeItf = itf;
+
+                    // Baud Rate 9600 Configuration
+                    const baudRate = 9600;
+                    const data = new Uint8Array([
+                        baudRate & 0xff,        
+                        (baudRate >> 8) & 0xff, 
+                        (baudRate >> 16) & 0xff,
+                        (baudRate >> 24) & 0xff,
+                        0x00, 0x00, 0x08        
+                    ]);
+
                     await device.controlTransferOut({
                         requestType: 'class', recipient: 'interface',
                         request: 0x20, value: 0x00, index: itf
-                    }, baudData);
+                    }, data);
+
+                    await device.controlTransferOut({
+                        requestType: 'class', recipient: 'interface',
+                        request: 0x22, value: 0x01, index: itf
+                    });
 
                     const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
-                    let input = endpoints.find(e => e.direction === 'in');
-                    if (input) {
-                        epIn = input.endpointNumber;
-                        success = true;
-                        break;
-                    }
-                } catch (e) { console.warn("Interface skip:", itf); }
+                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+                    if (epIn && epOut) { success = true; break; }
+                } catch (e) { console.error(itf, e); }
             }
 
             if (success) {
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Connected - Listen Only";
+                statusEl.innerText = "Connected at 9600 Baud";
                 readLoop();
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
     }
 
     async function readLoop() {
-        while (isConnected && device && device.opened) {
-            try {
-                // Wait for the 1-second packet from Arduino
-                const result = await device.transferIn(epIn, 4);
-                
-                if (result.data && result.data.byteLength === 4) {
-                    const view = new DataView(result.data.buffer);
-                    const bikeVel = view.getFloat32(0, true); 
+    while (isConnected && device && device.opened) {
+        try {
+            // 1. Read the 4 bytes sent by Arduino every 1 second
+            const result = await device.transferIn(epIn, 4);
+            
+            if (result.data && result.data.byteLength === 4) {
+                const view = new DataView(result.data.buffer);
+                const arduinoVel = view.getFloat32(0, true); 
                          
-                    if (bikeVel > 0.1) {
-                        if (videoEl.paused) videoEl.play();
-                        
-                        const ratio = bikeVel / avgSpeed;
-                        const safeRatio = Math.max(0.06, Math.min(16, ratio));
-                        
-                        displayEl.innerText = safeRatio.toFixed(2) + "x";
-                        mathDisplay.innerText = `${bikeVel.toFixed(1)} / ${avgSpeed} = ${safeRatio.toFixed(2)}`;
-                        
-                        if (videoEl.readyState >= 2) {
-                            videoEl.playbackRate = safeRatio;
-                        }
-                    } else { 
-                        if (!videoEl.paused) videoEl.pause();
-                        displayEl.innerText = "0.00x (Paused)";
-                        
-                        // Buffer Drain: Clear any redundant zeros
-                        await device.transferIn(epIn, 64).catch(() => {});
+                if (arduinoVel > 0.1) {
+                    // WAKE UP / STAY AWAKE
+                    if (!wakeLock) await requestWakeLock();
+                    if (videoEl.paused) await videoEl.play();
+                    
+                    const calculatedRatio = arduinoVel / avgSpeed;
+                    const safeRatio = Math.max(0.06, Math.min(16, calculatedRatio));
+                    
+                    // Update UI
+                    displayEl.innerText = safeRatio.toFixed(2) + "x";
+                    mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${safeRatio.toFixed(2)}`;
+                    
+                    if (videoEl.readyState >= 2) {
+                        videoEl.playbackRate = safeRatio;
                     }
+
+                    // Echo back for LCD
+                    //const echoStr = safeRatio.toFixed(2) + "\n";
+                   // await device.transferOut(epOut, encoder.encode(echoStr));
+                } else { 
+                    // VELOCITY IS ZERO
+                    if (!videoEl.paused) videoEl.pause();
+                    displayEl.innerText = "0.00x (Paused)";
+                    
+                    // DRAIN: Since we only expect 4 bytes every 1s, anything 
+                    // extra is old data. We "clear the pipe" here.
+                    try {
+                        await device.transferIn(epIn, 64); 
+                    } catch(e) {}
                 }
-            } catch (e) { 
-                await new Promise(r => setTimeout(r, 100));
             }
+        } catch (e) { 
+            console.warn("Sync lost or USB busy, retrying in 100ms...");
+            await new Promise(r => setTimeout(r, 100));
         }
     }
+}
 </script>
 </body>
 </html>
