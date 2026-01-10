@@ -119,35 +119,59 @@
     });
 
     async function connect() {
-        try {
-            device = await navigator.usb.requestDevice({ filters: [] });
-            await device.open();
-            if (device.configuration === null) await device.selectConfiguration(1);
+    try {
+        device = await navigator.usb.requestDevice({ filters: [] });
+        await device.open();
+        if (device.configuration === null) await device.selectConfiguration(1);
 
-            let success = false;
-            for (let itf of [2, 0, 1]) {
-                try {
-                    await device.claimInterface(itf);
-                    activeItf = itf;
-                    await device.controlTransferOut({
-                        requestType: 'class', recipient: 'interface',
-                        request: 0x22, value: 0x01, index: itf
-                    });
-                    const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
-                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
-                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
-                    if (epIn && epOut) { success = true; break; }
-                } catch (e) { }
-            }
+        let success = false;
+        for (let itf of [2, 0, 1]) {
+            try {
+                await device.claimInterface(itf);
+                activeItf = itf;
 
-            if (success) {
-                isConnected = true;
-                mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Binary Stream Connected";
-                readLoop();
-            }
-        } catch (err) { statusEl.innerText = "Error: " + err.message; }
-    }
+                // --- INÍCIO DA CONFIGURAÇÃO DO BAUD RATE (9600) ---
+                const baudRate = 9600;
+                const data = new Uint8Array([
+                    baudRate & 0xff,        // Byte 0 (LSB)
+                    (baudRate >> 8) & 0xff, // Byte 1
+                    (baudRate >> 16) & 0xff,// Byte 2
+                    (baudRate >> 24) & 0xff,// Byte 3 (MSB)
+                    0x00,                   // 1 Stop bit
+                    0x00,                   // Parity: None
+                    0x08                    // 8 Data bits
+                ]);
+
+                await device.controlTransferOut({
+                    requestType: 'class',
+                    recipient: 'interface',
+                    request: 0x20, // SET_LINE_CODING
+                    value: 0x00,
+                    index: itf
+                }, data);
+                // --- FIM DA CONFIGURAÇÃO ---
+
+                await device.controlTransferOut({
+                    requestType: 'class', recipient: 'interface',
+                    request: 0x22, value: 0x01, index: itf
+                });
+
+                const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
+                epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+                if (epIn && epOut) { success = true; break; }
+            } catch (e) { console.error(e); }
+        }
+
+        if (success) {
+            isConnected = true;
+            mainBtn.innerText = "DISCONNECT";
+            statusEl.innerText = "Connected at 9600 Baud";
+            readLoop();
+        }
+    } catch (err) { statusEl.innerText = "Error: " + err.message; }
+}
+
 
     async function readLoop() {
         while (isConnected && device && device.opened) {
