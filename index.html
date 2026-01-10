@@ -63,7 +63,7 @@
         const file = event.target.files[0];
         if (file) {
             // STEP: Ask user for the average speed
-            const userInput = window.prompt("Enter the Average Speed for this video:", "10.0");
+            const userInput = window.prompt("Enter the Average Speed for this video:", "30.0");
             
             // Validate and store the value
             const parsed = parseFloat(userInput);
@@ -83,7 +83,7 @@
     // 2. Unlock Video Control
     playBtn.addEventListener('click', () => {
         videoEl.play();
-        videoEl.playbackRate = 0.0;
+        videoEl.pause();
         statusEl.innerText = "Video Unlocked & Playing";
     });
 
@@ -132,24 +132,26 @@
                 if (result.data && result.data.byteLength === 4) {
                     const view = new DataView(result.data.buffer);
                     const arduinoVel = view.getFloat32(0, true); 
-                    
-                    if (!isNaN(arduinoVel)) {
-                        // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
-                        const calculatedRatio = arduinoVel / avgSpeed;
-
-                        // Update UI
-                        displayEl.innerText = calculatedRatio.toFixed(2) + "x";
-                        mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${calculatedRatio.toFixed(2)}`;
-                        
-                        // Apply to Video with safety limits (0.06x to 16x)
-                        if (videoEl.readyState >= 2) {
-                            videoEl.playbackRate = Math.max(0.06, Math.min(16, calculatedRatio));
-                        }
-
-                        // Echo back for Arduino LCD
-                        const echoStr = calculatedRatio.toFixed(2) + "\n";
-                        await device.transferOut(epOut, encoder.encode(echoStr));
-                    }
+                    if(arduinoVel>0){
+                            videoEl.play();
+                            if (!isNaN(arduinoVel)) {
+                                // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
+                                const calculatedRatio = arduinoVel / avgSpeed;
+        
+                                // Update UI
+                                displayEl.innerText = calculatedRatio.toFixed(2) + "x";
+                                mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${calculatedRatio.toFixed(2)}`;
+                                
+                                // Apply to Video with safety limits (0.06x to 16x)
+                                if (videoEl.readyState >= 2) {
+                                    videoEl.playbackRate = Math.max(0.06, Math.min(16, calculatedRatio));
+                                }
+        
+                                // Echo back for Arduino LCD
+                                const echoStr = calculatedRatio.toFixed(2) + "\n";
+                                await device.transferOut(epOut, encoder.encode(echoStr));
+                            }
+                    } else videoEl.pause();
                 }
             } catch (e) { 
                 console.error("Binary Read Error:", e);
