@@ -159,52 +159,53 @@
             }
         } catch (err) { statusEl.innerText = "Error: " + err.message; }
     }
-
-    async function readLoop() {
-        while (isConnected && device && device.opened) {
-            try {
-                // Read 4 bytes from Arduino
-                const result = await device.transferIn(epIn, 4);
-                
-                if (result.data && result.data.byteLength === 4) {
-                    const view = new DataView(result.data.buffer);
-                    const arduinoVel = view.getFloat32(0, true); 
+async function readLoop() {
+    while (isConnected && device && device.opened) {
+        try {
+            // 1. Read the 4 bytes sent by Arduino every 1 second
+            const result = await device.transferIn(epIn, 4);
+            
+            if (result.data && result.data.byteLength === 4) {
+                const view = new DataView(result.data.buffer);
+                const arduinoVel = view.getFloat32(0, true); 
                          
-                    if (arduinoVel > 0.1) {
-                        if (!wakeLock) await requestWakeLock();
-                        
-                        if (videoEl.paused) videoEl.play();
-                        
-                        const calculatedRatio = arduinoVel / avgSpeed;
-                        const safeRatio = Math.max(0.06, Math.min(16, calculatedRatio));
-                        
-                        displayEl.innerText = safeRatio.toFixed(2) + "x";
-                        mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${safeRatio.toFixed(2)}`;
-                        
-                        if (videoEl.readyState >= 2) {
-                            videoEl.playbackRate = safeRatio;
-                        }
-
-                        // Echo back for Arduino LCD
-                        const echoStr = safeRatio.toFixed(2) + "\n";
-                        await device.transferOut(epOut, encoder.encode(echoStr));
-                    } else { 
-                        // VELOCITY IS ZERO
-                        if (!videoEl.paused) videoEl.pause();
-                        displayEl.innerText = "0.00x (Paused)";
-                        
-                        // BUFFER DRAIN: Read and discard extra bytes while paused 
-                        // so the buffer doesn't grow and cause lag.
-                        await device.transferIn(epIn, 64).catch(() => {});
+                if (arduinoVel > 0.1) {
+                    // WAKE UP / STAY AWAKE
+                    if (!wakeLock) await requestWakeLock();
+                    if (videoEl.paused) await videoEl.play();
+                    
+                    const calculatedRatio = arduinoVel / avgSpeed;
+                    const safeRatio = Math.max(0.06, Math.min(16, calculatedRatio));
+                    
+                    // Update UI
+                    displayEl.innerText = safeRatio.toFixed(2) + "x";
+                    mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${safeRatio.toFixed(2)}`;
+                    
+                    if (videoEl.readyState >= 2) {
+                        videoEl.playbackRate = safeRatio;
                     }
+
+                    // Echo back for LCD
+                    const echoStr = safeRatio.toFixed(2) + "\n";
+                    await device.transferOut(epOut, encoder.encode(echoStr));
+                } else { 
+                    // VELOCITY IS ZERO
+                    if (!videoEl.paused) videoEl.pause();
+                    displayEl.innerText = "0.00x (Paused)";
+                    
+                    // DRAIN: Since we only expect 4 bytes every 1s, anything 
+                    // extra is old data. We "clear the pipe" here.
+                    try {
+                        await device.transferIn(epIn, 64); 
+                    } catch(e) {}
                 }
-            } catch (e) { 
-                console.warn("Read Loop Interrupted, retrying...", e);
-                // Tiny delay to prevent CPU spinning if connection flickers
-                await new Promise(r => setTimeout(r, 100));
             }
+        } catch (e) { 
+            console.warn("Sync lost or USB busy, retrying in 100ms...");
+            await new Promise(r => setTimeout(r, 100));
         }
     }
+}
 </script>
 </body>
 </html>
