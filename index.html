@@ -57,7 +57,6 @@
 
     videoEl.controls = false; 
 
-    // --- WAKE LOCK FUNCTIONS ---
     async function requestWakeLock() {
         try {
             if ('wakeLock' in navigator) {
@@ -69,14 +68,12 @@
         }
     }
 
-    // Re-acquire wake lock when tab becomes visible again
     document.addEventListener('visibilitychange', async () => {
         if (wakeLock !== null && document.visibilityState === 'visible') {
             await requestWakeLock();
         }
     });
 
-    // 1. Load Video
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (file) {
@@ -89,19 +86,16 @@
         }
     });
 
-    // 2. Unlock Video
     playBtn.addEventListener('click', async () => {
-        // We also request wake lock here as a fallback user gesture
         await requestWakeLock();
         videoEl.play();
         videoEl.pause();
         statusEl.innerText = "Video Unlocked & WakeLock Active";
     });
 
-    // 3. Connect and Go Fullscreen
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
-            await requestWakeLock(); // Essential to call this on user click
+            await requestWakeLock(); 
             await connect();
 
             try {
@@ -119,94 +113,95 @@
     });
 
     async function connect() {
-    try {
-        device = await navigator.usb.requestDevice({ filters: [] });
-        await device.open();
-        if (device.configuration === null) await device.selectConfiguration(1);
+        try {
+            device = await navigator.usb.requestDevice({ filters: [] });
+            await device.open();
+            if (device.configuration === null) await device.selectConfiguration(1);
 
-        let success = false;
-        for (let itf of [2, 0, 1]) {
-            try {
-                await device.claimInterface(itf);
-                activeItf = itf;
+            let success = false;
+            for (let itf of [2, 0, 1]) {
+                try {
+                    await device.claimInterface(itf);
+                    activeItf = itf;
 
-                // --- INÍCIO DA CONFIGURAÇÃO DO BAUD RATE (9600) ---
-                const baudRate = 9600;
-                const data = new Uint8Array([
-                    baudRate & 0xff,        // Byte 0 (LSB)
-                    (baudRate >> 8) & 0xff, // Byte 1
-                    (baudRate >> 16) & 0xff,// Byte 2
-                    (baudRate >> 24) & 0xff,// Byte 3 (MSB)
-                    0x00,                   // 1 Stop bit
-                    0x00,                   // Parity: None
-                    0x08                    // 8 Data bits
-                ]);
+                    // Baud Rate 9600 Configuration
+                    const baudRate = 9600;
+                    const data = new Uint8Array([
+                        baudRate & 0xff,        
+                        (baudRate >> 8) & 0xff, 
+                        (baudRate >> 16) & 0xff,
+                        (baudRate >> 24) & 0xff,
+                        0x00, 0x00, 0x08        
+                    ]);
 
-                await device.controlTransferOut({
-                    requestType: 'class',
-                    recipient: 'interface',
-                    request: 0x20, // SET_LINE_CODING
-                    value: 0x00,
-                    index: itf
-                }, data);
-                // --- FIM DA CONFIGURAÇÃO ---
+                    await device.controlTransferOut({
+                        requestType: 'class', recipient: 'interface',
+                        request: 0x20, value: 0x00, index: itf
+                    }, data);
 
-                await device.controlTransferOut({
-                    requestType: 'class', recipient: 'interface',
-                    request: 0x22, value: 0x01, index: itf
-                });
+                    await device.controlTransferOut({
+                        requestType: 'class', recipient: 'interface',
+                        request: 0x22, value: 0x01, index: itf
+                    });
 
-                const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
-                epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
-                epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
-                if (epIn && epOut) { success = true; break; }
-            } catch (e) { console.error(e); }
-        }
+                    const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
+                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+                    if (epIn && epOut) { success = true; break; }
+                } catch (e) { console.error(itf, e); }
+            }
 
-        if (success) {
-            isConnected = true;
-            mainBtn.innerText = "DISCONNECT";
-            statusEl.innerText = "Connected at 9600 Baud";
-            readLoop();
-        }
-    } catch (err) { statusEl.innerText = "Error: " + err.message; }
-}
-
+            if (success) {
+                isConnected = true;
+                mainBtn.innerText = "DISCONNECT";
+                statusEl.innerText = "Connected at 9600 Baud";
+                readLoop();
+            }
+        } catch (err) { statusEl.innerText = "Error: " + err.message; }
+    }
 
     async function readLoop() {
         while (isConnected && device && device.opened) {
             try {
+                // Read 4 bytes from Arduino
                 const result = await device.transferIn(epIn, 4);
                 
                 if (result.data && result.data.byteLength === 4) {
                     const view = new DataView(result.data.buffer);
                     const arduinoVel = view.getFloat32(0, true); 
                          
-                    if (arduinoVel > 0) {
-                        // Ensure screen stays alive and bright
+                    if (arduinoVel > 0.1) {
                         if (!wakeLock) await requestWakeLock();
                         
-                        videoEl.play();
+                        if (videoEl.paused) videoEl.play();
                         
                         const calculatedRatio = arduinoVel / avgSpeed;
-                        displayEl.innerText = calculatedRatio.toFixed(2) + "x";
-                        mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${calculatedRatio.toFixed(2)}`;
+                        const safeRatio = Math.max(0.06, Math.min(16, calculatedRatio));
+                        
+                        displayEl.innerText = safeRatio.toFixed(2) + "x";
+                        mathDisplay.innerText = `${arduinoVel.toFixed(1)} / ${avgSpeed} = ${safeRatio.toFixed(2)}`;
                         
                         if (videoEl.readyState >= 2) {
-                            videoEl.playbackRate = Math.max(0.06, Math.min(16, calculatedRatio));
+                            videoEl.playbackRate = safeRatio;
                         }
 
-                        const echoStr = calculatedRatio.toFixed(2) + "\n";
+                        // Echo back for Arduino LCD
+                        const echoStr = safeRatio.toFixed(2) + "\n";
                         await device.transferOut(epOut, encoder.encode(echoStr));
                     } else { 
-                        videoEl.pause();
-                        // Note: We don't release the wake lock here to prevent the phone 
-                        // from engaging the lock screen while paused.
+                        // VELOCITY IS ZERO
+                        if (!videoEl.paused) videoEl.pause();
+                        displayEl.innerText = "0.00x (Paused)";
+                        
+                        // BUFFER DRAIN: Read and discard extra bytes while paused 
+                        // so the buffer doesn't grow and cause lag.
+                        await device.transferIn(epIn, 64).catch(() => {});
                     }
                 }
             } catch (e) { 
-                console.error("Binary Read Error:", e);
-                break; 
+                console.warn("Read Loop Interrupted, retrying...", e);
+                // Tiny delay to prevent CPU spinning if connection flickers
+                await new Promise(r => setTimeout(r, 100));
             }
         }
     }
