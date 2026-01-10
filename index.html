@@ -83,7 +83,9 @@
     // 2. Unlock Video Control
     playBtn.addEventListener('click', () => {
         videoEl.play();
-        statusEl.innerText = "Video Unlocked & Playing";
+        videoEl.pause();
+        
+        statusEl.innerText = "Video Unlocked & Waiting Vel";
     });
 
     mainBtn.addEventListener('click', async () => {
