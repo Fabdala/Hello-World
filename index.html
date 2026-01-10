@@ -95,9 +95,7 @@
         if (!isConnected) {
         await connect();
 
-        //Disble play buttons at UI
-        videoEl.controls = false; 
-            
+                  
         // Enter fullscreen after connection
         try {
             if (videoEl.requestFullscreen) {
