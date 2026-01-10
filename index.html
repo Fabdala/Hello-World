@@ -58,6 +58,9 @@
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
 
+    //Disble play buttons at UI
+    videoEl.controls = false; 
+
     // 1. Load Video & Ask for Average Speed
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
@@ -91,7 +94,10 @@
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
         await connect();
-        
+
+        //Disble play buttons at UI
+        videoEl.controls = false; 
+            
         // Enter fullscreen after connection
         try {
             if (videoEl.requestFullscreen) {
