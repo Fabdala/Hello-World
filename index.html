@@ -85,6 +85,11 @@
         videoEl.play();
         videoEl.pause();
         statusEl.innerText = "Video Unlocked & Playing";
+         if (videoEl.requestFullscreen) {
+        videoEl.requestFullscreen();
+    } else if (videoEl.webkitRequestFullscreen) { // Safari/iOS support
+        videoEl.webkitRequestFullscreen();
+    }
     });
 
     mainBtn.addEventListener('click', async () => {
