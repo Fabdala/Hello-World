@@ -89,8 +89,25 @@
     });
 
     mainBtn.addEventListener('click', async () => {
-        if (!isConnected) await connect();
-        else location.reload(); 
+        if (!isConnected) {
+        await connect();
+        
+        // Enter fullscreen after connection
+        try {
+            if (videoEl.requestFullscreen) {
+                await videoEl.requestFullscreen();
+            } else if (videoEl.webkitRequestFullscreen) { /* Safari */
+                await videoEl.webkitRequestFullscreen();
+            } else if (videoEl.msRequestFullscreen) { /* IE11 */
+                await videoEl.msRequestFullscreen();
+            }
+        } catch (err) {
+            console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+        }
+        
+    } else {
+        location.reload();
+    }
     });
 
     async function connect() {
