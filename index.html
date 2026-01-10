@@ -83,7 +83,6 @@
     // 2. Unlock Video Control
     playBtn.addEventListener('click', () => {
         videoEl.play();
-        videoEl.pause();
         statusEl.innerText = "Video Unlocked & Playing";
     });
 
@@ -132,8 +131,7 @@
                 if (result.data && result.data.byteLength === 4) {
                     const view = new DataView(result.data.buffer);
                     const arduinoVel = view.getFloat32(0, true); 
-                    if (arduinoVel>0){
-                            videoEl.play();
+               
                             if (!isNaN(arduinoVel)) {
                                 // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
                                 const calculatedRatio = arduinoVel / avgSpeed;
@@ -151,8 +149,7 @@
                                 const echoStr = calculatedRatio.toFixed(2) + "\n";
                                 await device.transferOut(epOut, encoder.encode(echoStr));
                             }
-                        else  videoEl.pause();
-                    }
+                        
             } catch (e) { 
                 console.error("Binary Read Error:", e);
                 break; 
