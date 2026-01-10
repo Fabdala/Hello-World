@@ -133,7 +133,7 @@
                     const arduinoVel = view.getFloat32(0, true); 
                     
                     if (arduinoVel>0 )videoEl.play();
-                    if (arduinoVel=0 )videoEl.pause();
+                    if (arduinoVel === 0) videoEl.pause();
                     
                     if (!isNaN(arduinoVel)) {
                         // NEW CALCULATION: Ratio = Arduino Speed / Video Average Speed
