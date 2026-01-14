@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arduino Binary Video Control</title>
+    <title>S4 Optimized Video Bridge</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; transition: filter 0.3s; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
         .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
         video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; }
         .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
@@ -33,10 +33,10 @@
         <button id="mainBtn" class="btn-connect">2. CONNECT ARDUINO</button>
     </div>
 
-    <div class="math-info" id="mathDisplay">Select a video to set Average Speed</div>
+    <div class="math-info" id="mathDisplay">Select video & set speed</div>
     <div class="label">Calculated Playback Ratio</div>
     <div class="value-box" id="display">1.00x</div>
-    <div id="status">Waiting for binary data...</div>
+    <div id="status">Waiting for user...</div>
 </div>
 
 <script>
@@ -46,9 +46,11 @@
     let wakeLock = null;
     let activeItf, epIn, epOut;
     
-    // Logic state variables
+    // Logic state variables for robustness
     let lastSetRate = -1;
     let isTransitioning = false; 
+    let lastCommandTime = 0;
+    const COMMAND_COOLDOWN = 400; // 400ms guard for older Samsung hardware
 
     const mainBtn = document.getElementById('mainBtn');
     const playBtn = document.getElementById('playBtn');
@@ -58,8 +60,7 @@
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
 
-    videoEl.controls = false; 
-
+    // Wake Lock to prevent phone from sleeping
     async function requestWakeLock() {
         try {
             if ('wakeLock' in navigator) {
@@ -68,25 +69,28 @@
         } catch (err) { console.error(err.message); }
     }
 
+    // Video File Selection
     filePicker.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (file) {
-            const userInput = window.prompt("Enter the Average Speed for this video:", "30.0");
+            const userInput = window.prompt("Enter the Average Speed:", "30.0");
             const parsed = parseFloat(userInput);
             avgSpeed = (!isNaN(parsed) && parsed > 0) ? parsed : 1.0;
             videoEl.src = URL.createObjectURL(file);
             mathDisplay.innerText = `Baseline: ${avgSpeed}`;
-            statusEl.innerText = "Video loaded. Ready.";
+            statusEl.innerText = "Video ready. Click Start.";
         }
     });
 
+    // Permission Unlock
     playBtn.addEventListener('click', async () => {
         await requestWakeLock();
         videoEl.play();
         videoEl.pause();
-        statusEl.innerText = "Video Unlocked & Active";
+        statusEl.innerText = "Video Unlocked.";
     });
 
+    // USB Connection Toggle
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
             await connect();
@@ -95,11 +99,12 @@
         }
     });
 
+    // Handshake function (0xAA)
     async function sendAck() {
         if (device && isConnected) {
             try {
                 await device.transferOut(epOut, new Uint8Array([0xAA]));
-            } catch (e) { console.warn("ACK failed"); }
+            } catch (e) { console.warn("Handshake fail"); }
         }
     }
 
@@ -115,16 +120,11 @@
                     await device.claimInterface(itf);
                     activeItf = itf;
 
-                    const baudRate = 9600;
-                    const data = new Uint8Array([
-                        baudRate & 0xff, (baudRate >> 8) & 0xff, (baudRate >> 16) & 0xff, (baudRate >> 24) & 0xff,
-                        0x00, 0x00, 0x08 
-                    ]);
-
+                    const baudData = new Uint8Array([0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x08]);
                     await device.controlTransferOut({
                         requestType: 'class', recipient: 'interface',
                         request: 0x20, value: 0x00, index: itf
-                    }, data);
+                    }, baudData);
 
                     await device.controlTransferOut({
                         requestType: 'class', recipient: 'interface',
@@ -135,13 +135,13 @@
                     epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
                     epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
                     if (epIn && epOut) { success = true; break; }
-                } catch (e) { console.error("Trying interface", itf, e); }
+                } catch (e) { console.error(e); }
             }
 
             if (success) {
                 isConnected = true;
                 mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Connected & Syncing";
+                statusEl.innerText = "Connected & Active";
                 await sendAck(); 
                 readLoop();
             }
@@ -156,11 +156,15 @@
                 if (result.data && result.data.byteLength === 4) {
                     const view = new DataView(result.data.buffer);
                     const arduinoVel = view.getFloat32(0, true); 
+                    const now = Date.now();
                              
-                    if (!isTransitioning) {
+                    // Robustness Checks: Transition Lock + Hardware Cooldown
+                    if (!isTransitioning && (now - lastCommandTime > COMMAND_COOLDOWN)) {
                         if (arduinoVel > 0.1) {
+                            // Only Play if Paused
                             if (videoEl.paused) {
                                 isTransitioning = true;
+                                lastCommandTime = now;
                                 videoEl.play()
                                     .then(() => { isTransitioning = false; })
                                     .catch(e => { isTransitioning = false; });
@@ -168,7 +172,8 @@
                             
                             const safeRatio = Math.max(0.06, Math.min(16, arduinoVel / avgSpeed));
                             
-                            if (Math.abs(lastSetRate - safeRatio) > 0.01) {
+                            // Only update rate if significant change (>0.05)
+                            if (Math.abs(lastSetRate - safeRatio) > 0.05) {
                                 if (videoEl.readyState >= 2) {
                                     videoEl.playbackRate = safeRatio;
                                     lastSetRate = safeRatio;
@@ -176,21 +181,22 @@
                                 }
                             }
                         } else { 
+                            // Only Pause if Playing
                             if (!videoEl.paused) {
                                 isTransitioning = true;
+                                lastCommandTime = now;
                                 videoEl.pause();
-                                isTransitioning = false; // Pause is synchronous
+                                isTransitioning = false;
                                 displayEl.innerText = "0.00x (Paused)";
                                 lastSetRate = 0;
                             }
                         }
                     }
 
-                    // Always ask for more data after processing
+                    // Handshake: Tell Arduino we are ready for the next 1s update
                     await sendAck();
                 }
             } catch (e) { 
-                console.warn("Sync lost, retrying...");
                 await new Promise(r => setTimeout(r, 100));
                 await sendAck(); 
             }
