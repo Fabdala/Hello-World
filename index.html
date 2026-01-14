@@ -3,197 +3,219 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>S4 Optimized Video Bridge</title>
+    <title>Bike Video Bridge</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
-        .container { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; width: 95%; max-width: 500px; }
-        video { width: 100%; border-radius: 10px; margin-top: 15px; background: #000; }
-        .controls { margin: 20px 0; display: flex; flex-direction: column; gap: 10px; }
-        button { padding: 15px; font-size: 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
-        .btn-connect { background: #28a745; color: white; }
-        .btn-play { background: #007bff; color: white; }
-        .value-box { font-size: 48px; font-weight: bold; color: #007bff; margin: 5px 0; }
-        #status { color: #666; font-size: 14px; margin-top: 10px; font-style: italic; }
-        .label { font-size: 12px; color: #999; text-transform: uppercase; margin-top: 10px; }
-        .math-info { font-size: 16px; color: #444; background: #e9ecef; padding: 10px; border-radius: 8px; margin-top: 10px; }
+        :root {
+            --primary: #007bff;
+            --success: #28a745;
+            --dark: #2c3e50;
+        }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            padding: 10px; 
+            background: #1a1a1a; 
+            color: white;
+            margin: 0;
+        }
+        .container { 
+            background: #2d2d2d; 
+            padding: 20px; 
+            border-radius: 25px; 
+            display: inline-block; 
+            width: 95%; 
+            max-width: 600px; 
+            margin-top: 10px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.5);
+        }
+        video { 
+            width: 100%; 
+            border-radius: 15px; 
+            margin: 15px 0; 
+            background: #000;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .controls { 
+            display: grid; 
+            grid-template-columns: 1fr; 
+            gap: 12px; 
+            margin-top: 20px;
+        }
+        /* Style for the Hidden File Input */
+        #filePicker { display: none; }
+        
+        .btn {
+            padding: 18px;
+            font-size: 18px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: transform 0.1s, background 0.3s;
+        }
+        .btn:active { transform: scale(0.96); }
+
+        .btn-file { background: var(--primary); color: white; }
+        .btn-connect { background: var(--success); color: white; }
+        .btn-fullscreen { background: #6c757d; color: white; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .stat-card {
+            background: #3d3d3d;
+            padding: 15px;
+            border-radius: 15px;
+        }
+        .value-box { font-size: 32px; font-weight: 900; color: #4fc3f7; }
+        .label { font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 5px; }
+        #status { font-size: 12px; color: #888; margin-top: 15px; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>Dynamic Speed Bridge</h2>
-    
-    <video id="myVideo" loop muted playsinline>
-        Your browser does not support the video tag.
-    </video>
+<div class="container" id="mainContainer">
+    <video id="myVideo" loop muted playsinline></video>
 
-    <div class="controls">
-        <input type="file" id="filePicker" accept="video/*">
-        <button id="playBtn" class="btn-play">1. START VIDEO</button>
-        <button id="mainBtn" class="btn-connect">2. CONNECT ARDUINO</button>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="label">Playback Rate</div>
+            <div class="value-box" id="display">0.00x</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Target Speed</div>
+            <div id="mathDisplay" style="font-weight: bold; font-size: 18px; margin-top: 10px;">--</div>
+        </div>
     </div>
 
-    <div class="math-info" id="mathDisplay">Select video & set speed</div>
-    <div class="label">Calculated Playback Ratio</div>
-    <div class="value-box" id="display">1.00x</div>
-    <div id="status">Waiting for user...</div>
+    <div class="controls">
+        <label for="filePicker" class="btn btn-file">📂 Choose Video</label>
+        <input type="file" id="filePicker" accept="video/*">
+
+        <button id="mainBtn" class="btn btn-connect">🚲 Connect To Bike</button>
+
+        <button id="fullBtn" class="btn btn-fullscreen">📺 Full Screen</button>
+    </div>
+
+    <div id="status">System Ready</div>
 </div>
 
 <script>
-    let device;
-    let isConnected = false;
-    let avgSpeed = 1.0;
-    let wakeLock = null;
-    let activeItf, epIn, epOut;
-    
-    // Logic state variables for robustness
-    let lastSetRate = -1;
-    let isTransitioning = false; 
-    let lastCommandTime = 0;
-    const COMMAND_COOLDOWN = 400; // 400ms guard for older Samsung hardware
+    let device, isConnected = false, avgSpeed = 1.0, wakeLock = null;
+    let activeItf, epIn, epOut, lastSetRate = -1, isTransitioning = false, lastCommandTime = 0;
+    const COMMAND_COOLDOWN = 400;
 
-    const mainBtn = document.getElementById('mainBtn');
-    const playBtn = document.getElementById('playBtn');
-    const statusEl = document.getElementById('status');
-    const displayEl = document.getElementById('display');
-    const mathDisplay = document.getElementById('mathDisplay');
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
+    const mainBtn = document.getElementById('mainBtn');
+    const fullBtn = document.getElementById('fullBtn');
+    const displayEl = document.getElementById('display');
+    const mathDisplay = document.getElementById('mathDisplay');
+    const statusEl = document.getElementById('status');
 
-    // Wake Lock to prevent phone from sleeping
-    async function requestWakeLock() {
-        try {
-            if ('wakeLock' in navigator) {
-                wakeLock = await navigator.wakeLock.request('screen');
-            }
-        } catch (err) { console.error(err.message); }
-    }
-
-    // Video File Selection
-    filePicker.addEventListener('change', (event) => {
-        const file = event.target.files[0];
+    // 1. CHOOSE VIDEO LOGIC
+    filePicker.addEventListener('change', (e) => {
+        const file = e.target.files[0];
         if (file) {
-            const userInput = window.prompt("Enter the Average Speed:", "30.0");
-            const parsed = parseFloat(userInput);
-            avgSpeed = (!isNaN(parsed) && parsed > 0) ? parsed : 1.0;
+            const userInput = window.prompt("Enter Average Speed (km/h):", "30.0");
+            avgSpeed = parseFloat(userInput) || 1.0;
             videoEl.src = URL.createObjectURL(file);
-            mathDisplay.innerText = `Baseline: ${avgSpeed}`;
-            statusEl.innerText = "Video ready. Click Start.";
+            mathDisplay.innerText = avgSpeed + " km/h";
+            statusEl.innerText = "Video loaded. Ready to connect.";
+            
+            // Auto-unlock video for the browser
+            videoEl.play().then(() => videoEl.pause());
         }
     });
 
-    // Permission Unlock
-    playBtn.addEventListener('click', async () => {
-        await requestWakeLock();
-        videoEl.play();
-        videoEl.pause();
-        statusEl.innerText = "Video Unlocked.";
-    });
-
-    // USB Connection Toggle
+    // 2. CONNECT TO BIKE LOGIC
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
-            await connect();
+            try {
+                device = await navigator.usb.requestDevice({ filters: [] });
+                await device.open();
+                if (device.configuration === null) await device.selectConfiguration(1);
+                
+                let success = false;
+                for (let itf of [2, 0, 1]) {
+                    try {
+                        await device.claimInterface(itf);
+                        const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
+                        epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
+                        epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
+                        if (epIn && epOut) { success = true; break; }
+                    } catch (e) {}
+                }
+
+                if (success) {
+                    isConnected = true;
+                    mainBtn.innerText = "🛑 Disconnect";
+                    mainBtn.style.background = "#dc3545";
+                    statusEl.innerText = "Linked to Bike";
+                    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+                    await sendAck(); 
+                    readLoop();
+                }
+            } catch (err) { statusEl.innerText = "Error: " + err.message; }
         } else {
             location.reload();
         }
     });
 
-    // Handshake function (0xAA)
+    // 3. FULL SCREEN LOGIC
+    fullBtn.addEventListener('click', () => {
+        if (videoEl.requestFullscreen) {
+            videoEl.requestFullscreen();
+        } else if (videoEl.webkitRequestFullscreen) { /* Safari/Old Chrome */
+            videoEl.webkitRequestFullscreen();
+        } else if (videoEl.msRequestFullscreen) {
+            videoEl.msRequestFullscreen();
+        }
+    });
+
     async function sendAck() {
         if (device && isConnected) {
-            try {
-                await device.transferOut(epOut, new Uint8Array([0xAA]));
-            } catch (e) { console.warn("Handshake fail"); }
+            try { await device.transferOut(epOut, new Uint8Array([0xAA])); } catch (e) {}
         }
-    }
-
-    async function connect() {
-        try {
-            device = await navigator.usb.requestDevice({ filters: [] });
-            await device.open();
-            if (device.configuration === null) await device.selectConfiguration(1);
-
-            let success = false;
-            for (let itf of [2, 0, 1]) {
-                try {
-                    await device.claimInterface(itf);
-                    activeItf = itf;
-
-                    const baudData = new Uint8Array([0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x08]);
-                    await device.controlTransferOut({
-                        requestType: 'class', recipient: 'interface',
-                        request: 0x20, value: 0x00, index: itf
-                    }, baudData);
-
-                    await device.controlTransferOut({
-                        requestType: 'class', recipient: 'interface',
-                        request: 0x22, value: 0x01, index: itf
-                    });
-
-                    const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
-                    epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
-                    epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
-                    if (epIn && epOut) { success = true; break; }
-                } catch (e) { console.error(e); }
-            }
-
-            if (success) {
-                isConnected = true;
-                mainBtn.innerText = "DISCONNECT";
-                statusEl.innerText = "Connected & Active";
-                await sendAck(); 
-                readLoop();
-            }
-        } catch (err) { statusEl.innerText = "Error: " + err.message; }
     }
 
     async function readLoop() {
         while (isConnected && device && device.opened) {
             try {
                 const result = await device.transferIn(epIn, 4);
-                
                 if (result.data && result.data.byteLength === 4) {
-                    const view = new DataView(result.data.buffer);
-                    const arduinoVel = view.getFloat32(0, true); 
+                    const arduinoVel = new DataView(result.data.buffer).getFloat32(0, true); 
                     const now = Date.now();
                              
-                    // Robustness Checks: Transition Lock + Hardware Cooldown
                     if (!isTransitioning && (now - lastCommandTime > COMMAND_COOLDOWN)) {
                         if (arduinoVel > 0.1) {
-                            // Only Play if Paused
                             if (videoEl.paused) {
                                 isTransitioning = true;
                                 lastCommandTime = now;
-                                videoEl.play()
-                                    .then(() => { isTransitioning = false; })
-                                    .catch(e => { isTransitioning = false; });
+                                videoEl.play().then(() => { isTransitioning = false; }).catch(() => { isTransitioning = false; });
                             }
-                            
                             const safeRatio = Math.max(0.06, Math.min(16, arduinoVel / avgSpeed));
-                            
-                            // Only update rate if significant change (>0.05)
                             if (Math.abs(lastSetRate - safeRatio) > 0.05) {
-                                if (videoEl.readyState >= 2) {
-                                    videoEl.playbackRate = safeRatio;
-                                    lastSetRate = safeRatio;
-                                    displayEl.innerText = safeRatio.toFixed(2) + "x";
-                                }
+                                videoEl.playbackRate = safeRatio;
+                                lastSetRate = safeRatio;
+                                displayEl.innerText = safeRatio.toFixed(2) + "x";
                             }
                         } else { 
-                            // Only Pause if Playing
                             if (!videoEl.paused) {
                                 isTransitioning = true;
                                 lastCommandTime = now;
                                 videoEl.pause();
                                 isTransitioning = false;
-                                displayEl.innerText = "0.00x (Paused)";
+                                displayEl.innerText = "0.00x";
                                 lastSetRate = 0;
                             }
                         }
                     }
-
-                    // Handshake: Tell Arduino we are ready for the next 1s update
                     await sendAck();
                 }
             } catch (e) { 
