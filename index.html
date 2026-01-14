@@ -5,135 +5,76 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bike Video Bridge</title>
     <style>
-        :root {
-            --primary: #007bff;
-            --success: #28a745;
-            --dark: #2c3e50;
-        }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            text-align: center; 
-            padding: 10px; 
-            background: #1a1a1a; 
-            color: white;
-            margin: 0;
-        }
-        .container { 
-            background: #2d2d2d; 
-            padding: 20px; 
-            border-radius: 25px; 
-            display: inline-block; 
-            width: 95%; 
-            max-width: 600px; 
-            margin-top: 10px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.5);
-        }
-        video { 
-            width: 100%; 
-            border-radius: 15px; 
-            margin: 15px 0; 
-            background: #000;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-        }
-        .controls { 
-            display: grid; 
-            grid-template-columns: 1fr; 
-            gap: 12px; 
-            margin-top: 20px;
-        }
-        /* Style for the Hidden File Input */
+        :root { --primary: #007bff; --success: #28a745; --dark: #1a1a1a; }
+        body { font-family: sans-serif; text-align: center; background: var(--dark); color: white; margin: 0; padding: 10px; }
+        .container { background: #2d2d2d; padding: 20px; border-radius: 25px; display: inline-block; width: 95%; max-width: 600px; box-shadow: 0 15px 35px rgba(0,0,0,0.5); }
+        video { width: 100%; border-radius: 15px; margin: 15px 0; background: #000; }
+        .controls { display: grid; grid-template-columns: 1fr; gap: 12px; }
         #filePicker { display: none; }
-        
-        .btn {
-            padding: 18px;
-            font-size: 18px;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: transform 0.1s, background 0.3s;
-        }
-        .btn:active { transform: scale(0.96); }
-
+        .btn { padding: 18px; font-size: 18px; border: none; border-radius: 12px; cursor: pointer; font-weight: 700; text-transform: uppercase; transition: 0.2s; }
         .btn-file { background: var(--primary); color: white; }
         .btn-connect { background: var(--success); color: white; }
         .btn-fullscreen { background: #6c757d; color: white; }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .stat-card {
-            background: #3d3d3d;
-            padding: 15px;
-            border-radius: 15px;
-        }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
+        .stat-card { background: #3d3d3d; padding: 15px; border-radius: 15px; }
         .value-box { font-size: 32px; font-weight: 900; color: #4fc3f7; }
-        .label { font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 5px; }
-        #status { font-size: 12px; color: #888; margin-top: 15px; }
+        .label { font-size: 11px; color: #aaa; text-transform: uppercase; }
+        #status { font-size: 12px; color: #888; margin-top: 15px; font-style: italic; }
     </style>
 </head>
 <body>
 
-<div class="container" id="mainContainer">
+<div class="container">
     <video id="myVideo" loop muted playsinline></video>
 
     <div class="stats-grid">
         <div class="stat-card">
-            <div class="label">Playback Rate</div>
-            <div class="value-box" id="display">0.00x</div>
+            <div class="label">Actual Bike Speed</div>
+            <div class="value-box" id="speedDisplay">0.0</div>
+            <div style="font-size: 12px; color: #4fc3f7;">km/h</div>
         </div>
         <div class="stat-card">
-            <div class="label">Target Speed</div>
-            <div id="mathDisplay" style="font-weight: bold; font-size: 18px; margin-top: 10px;">--</div>
+            <div class="label">Playback Rate</div>
+            <div class="value-box" id="rateDisplay">0.00x</div>
         </div>
     </div>
 
     <div class="controls">
-        <label for="filePicker" class="btn btn-file">📂 Choose Video</label>
+        <label for="filePicker" class="btn btn-file">📂 1. Select Video</label>
         <input type="file" id="filePicker" accept="video/*">
 
-        <button id="mainBtn" class="btn btn-connect">🚲 Connect To Bike</button>
-
-        <button id="fullBtn" class="btn btn-fullscreen">📺 Full Screen</button>
+        <button id="mainBtn" class="btn btn-connect">🚲 2. Connect To Bike</button>
+        <button id="fullBtn" class="btn btn-fullscreen">📺 3. Full Screen</button>
     </div>
 
-    <div id="status">System Ready</div>
+    <div id="status">Please select a video file...</div>
 </div>
 
 <script>
     let device, isConnected = false, avgSpeed = 1.0, wakeLock = null;
-    let activeItf, epIn, epOut, lastSetRate = -1, isTransitioning = false, lastCommandTime = 0;
+    let epIn, epOut, lastSetRate = -1, isTransitioning = false, lastCommandTime = 0;
     const COMMAND_COOLDOWN = 400;
 
     const videoEl = document.getElementById('myVideo');
     const filePicker = document.getElementById('filePicker');
     const mainBtn = document.getElementById('mainBtn');
     const fullBtn = document.getElementById('fullBtn');
-    const displayEl = document.getElementById('display');
-    const mathDisplay = document.getElementById('mathDisplay');
+    const speedDisplay = document.getElementById('speedDisplay');
+    const rateDisplay = document.getElementById('rateDisplay');
     const statusEl = document.getElementById('status');
 
-    // 1. CHOOSE VIDEO LOGIC
     filePicker.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) {
-            const userInput = window.prompt("Enter Average Speed (km/h):", "30.0");
-            avgSpeed = parseFloat(userInput) || 1.0;
+            const userInput = window.prompt("Average Speed for this video (km/h):", "30.0");
+            avgSpeed = parseFloat(userInput) || 30.0;
             videoEl.src = URL.createObjectURL(file);
-            mathDisplay.innerText = avgSpeed + " km/h";
-            statusEl.innerText = "Video loaded. Ready to connect.";
-            
-            // Auto-unlock video for the browser
-            videoEl.play().then(() => videoEl.pause());
+            statusEl.innerText = "Video ready. Connect bike.";
+            // Prime the video
+            videoEl.play().then(() => videoEl.pause()).catch(err => console.log("Priming..."));
         }
     });
 
-    // 2. CONNECT TO BIKE LOGIC
     mainBtn.addEventListener('click', async () => {
         if (!isConnected) {
             try {
@@ -145,6 +86,18 @@
                 for (let itf of [2, 0, 1]) {
                     try {
                         await device.claimInterface(itf);
+                        
+                        // RESTORED: Vital CDC/Baud Configuration for Pro Micro
+                        const baudData = new Uint8Array([0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x08]);
+                        await device.controlTransferOut({
+                            requestType: 'class', recipient: 'interface',
+                            request: 0x20, value: 0x00, index: itf
+                        }, baudData);
+                        await device.controlTransferOut({
+                            requestType: 'class', recipient: 'interface',
+                            request: 0x22, value: 0x01, index: itf
+                        });
+
                         const endpoints = device.configuration.interfaces[itf].alternates[0].endpoints;
                         epIn = endpoints.find(e => e.direction === 'in').endpointNumber;
                         epOut = endpoints.find(e => e.direction === 'out').endpointNumber;
@@ -156,26 +109,18 @@
                     isConnected = true;
                     mainBtn.innerText = "🛑 Disconnect";
                     mainBtn.style.background = "#dc3545";
-                    statusEl.innerText = "Linked to Bike";
+                    statusEl.innerText = "Connected!";
                     if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
                     await sendAck(); 
                     readLoop();
                 }
-            } catch (err) { statusEl.innerText = "Error: " + err.message; }
-        } else {
-            location.reload();
-        }
+            } catch (err) { statusEl.innerText = "Connection Failed: " + err.message; }
+        } else { location.reload(); }
     });
 
-    // 3. FULL SCREEN LOGIC
     fullBtn.addEventListener('click', () => {
-        if (videoEl.requestFullscreen) {
-            videoEl.requestFullscreen();
-        } else if (videoEl.webkitRequestFullscreen) { /* Safari/Old Chrome */
-            videoEl.webkitRequestFullscreen();
-        } else if (videoEl.msRequestFullscreen) {
-            videoEl.msRequestFullscreen();
-        }
+        if (videoEl.requestFullscreen) videoEl.requestFullscreen();
+        else if (videoEl.webkitRequestFullscreen) videoEl.webkitRequestFullscreen();
     });
 
     async function sendAck() {
@@ -191,7 +136,10 @@
                 if (result.data && result.data.byteLength === 4) {
                     const arduinoVel = new DataView(result.data.buffer).getFloat32(0, true); 
                     const now = Date.now();
-                             
+                    
+                    // Display actual bike speed
+                    speedDisplay.innerText = arduinoVel.toFixed(1);
+
                     if (!isTransitioning && (now - lastCommandTime > COMMAND_COOLDOWN)) {
                         if (arduinoVel > 0.1) {
                             if (videoEl.paused) {
@@ -203,7 +151,7 @@
                             if (Math.abs(lastSetRate - safeRatio) > 0.05) {
                                 videoEl.playbackRate = safeRatio;
                                 lastSetRate = safeRatio;
-                                displayEl.innerText = safeRatio.toFixed(2) + "x";
+                                rateDisplay.innerText = safeRatio.toFixed(2) + "x";
                             }
                         } else { 
                             if (!videoEl.paused) {
@@ -211,7 +159,7 @@
                                 lastCommandTime = now;
                                 videoEl.pause();
                                 isTransitioning = false;
-                                displayEl.innerText = "0.00x";
+                                rateDisplay.innerText = "0.00x";
                                 lastSetRate = 0;
                             }
                         }
